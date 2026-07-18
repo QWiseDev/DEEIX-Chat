@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SpinnerLabel } from "@/components/ui/spinner";
 import { PASSWORD_MIN_LENGTH } from "@/shared/auth/account-policy";
+import { DingTalkQRCodeLoginDialog } from "@/features/auth/components/dingtalk-qr-login-dialog";
 import { useLoginPage } from "@/features/auth/hooks/use-auth-login-page";
 import { AppLogo } from "@/shared/components/app-logo";
 import { IdentityProviderIcon } from "@/shared/components/identity-provider-icon";
@@ -34,8 +35,10 @@ export function LoginPage({ nextPath }: LoginPageProps) {
   const {
     cancelTwoFactorChallenge,
     canShowRegisterSwitch,
+    closeDingTalkQRCodeLogin,
     codeSent,
     configReady,
+    dingTalkQRCodeLogin,
     emailRegistrationEnabled,
     emailVerificationEnabled,
     handleProviderLogin,
@@ -423,7 +426,11 @@ export function LoginPage({ nextPath }: LoginPageProps) {
                         iconClassName="size-5"
                         fallbackClassName="text-sm font-semibold uppercase text-foreground"
                       />
-                      <span className="truncate">{t("providerLogin", { provider: provider.name })}</span>
+                      <span className="truncate">
+                        {provider.type === "dingtalk"
+                          ? t("dingtalkQRCode.entry", { provider: provider.name })
+                          : t("providerLogin", { provider: provider.name })}
+                      </span>
                     </span>
                   </Button>
                 ))}
@@ -449,6 +456,13 @@ export function LoginPage({ nextPath }: LoginPageProps) {
       </div>
 
       <CustomBrandAttribution className="fixed bottom-4 right-4" />
+      {dingTalkQRCodeLogin ? (
+        <DingTalkQRCodeLoginDialog
+          authURL={dingTalkQRCodeLogin.authURL}
+          providerName={dingTalkQRCodeLogin.providerName}
+          onClose={closeDingTalkQRCodeLogin}
+        />
+      ) : null}
     </main>
   );
 }

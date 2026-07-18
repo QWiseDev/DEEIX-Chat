@@ -64,7 +64,7 @@ export function AuthCallbackPage() {
     }
 
     const provider = params.get("provider") ?? "";
-    const code = params.get("code") ?? "";
+    const code = params.get("code") ?? params.get("authCode") ?? "";
     const state = params.get("state") ?? "";
     const parsedState = parseProviderState(state);
     const intent = parsedState.intent;

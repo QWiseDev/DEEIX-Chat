@@ -192,8 +192,9 @@ const (
 )
 
 const (
-	IdentityProviderTypeOIDC   = "oidc"
-	IdentityProviderTypeOAuth2 = "oauth2"
+	IdentityProviderTypeOIDC     = "oidc"
+	IdentityProviderTypeOAuth2   = "oauth2"
+	IdentityProviderTypeDingTalk = "dingtalk"
 )
 
 // IdentityProvider 表示企业登录身份源配置。

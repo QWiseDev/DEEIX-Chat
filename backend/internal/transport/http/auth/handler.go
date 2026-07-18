@@ -533,6 +533,58 @@ func (h *Handler) StartProviderLogin(c *gin.Context) {
 	c.Redirect(http.StatusFound, target)
 }
 
+func (h *Handler) StartDingTalkWorkbenchLogin(c *gin.Context) {
+	var req StartDingTalkWorkbenchLoginRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.InvalidRequestBody(c, err)
+		return
+	}
+	result, err := h.service.StartDingTalkWorkbenchLogin(c.Request.Context(), c.Param("slug"), req.CodeChallenge)
+	if err != nil {
+		response.ErrorFrom(c, http.StatusBadRequest, err)
+		return
+	}
+	response.Success(c, DingTalkWorkbenchStartResponse{ClientID: result.ClientID, State: result.State})
+}
+
+func (h *Handler) CompleteDingTalkWorkbenchLogin(c *gin.Context) {
+	var req CompleteDingTalkWorkbenchLoginRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.InvalidRequestBody(c, err)
+		return
+	}
+	result, err := h.service.CompleteDingTalkWorkbenchLogin(
+		c.Request.Context(),
+		c.Param("slug"),
+		req.Code,
+		req.CorpID,
+		req.State,
+		req.CodeVerifier,
+		middleware.MustRequestID(c),
+		middleware.ResolveSessionAuditContext(c),
+	)
+	if err != nil {
+		response.ErrorFrom(c, http.StatusBadRequest, err)
+		return
+	}
+	h.writeRefreshTokenCookie(c, result)
+	response.Success(c, toLoginResponse(result))
+}
+
+func (h *Handler) StartDingTalkQRCodeLogin(c *gin.Context) {
+	var req StartDingTalkQRCodeLoginRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.InvalidRequestBody(c, err)
+		return
+	}
+	result, err := h.service.StartDingTalkQRCodeLogin(c.Request.Context(), c.Param("slug"), req.RedirectURI, req.Next, req.CodeChallenge)
+	if err != nil {
+		response.ErrorFrom(c, http.StatusBadRequest, err)
+		return
+	}
+	response.Success(c, DingTalkQRCodeStartResponse{AuthURL: result.AuthURL})
+}
+
 func (h *Handler) ProviderCallback(c *gin.Context) {
 	response.Error(c, http.StatusBadRequest, "configure the provider callback URL to the frontend callback endpoint")
 }

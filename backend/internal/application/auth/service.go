@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/billing"
@@ -44,6 +45,11 @@ type Service struct {
 	geoResolver          *geoip.Client
 	subscriptionResolver subscriptionResolver
 	providerHTTPClient   *http.Client
+	dingTalkAPIBaseURL   string
+	dingTalkOAPIBaseURL  string
+	dingTalkLoginURL     string
+	dingTalkTokenMu      sync.Mutex
+	dingTalkAppTokens    map[string]dingTalkCachedAppToken
 	logger               *zap.Logger
 	storeProvider        appstorage.Provider
 	auditWriter          auditWriter
@@ -82,11 +88,15 @@ func NewServiceWithRuntime(cfg *config.Runtime, repo repository.AuthRepository, 
 	}
 	providerHTTPClient := newAuthOutboundHTTPClient(env, ssrfProtectionEnabled)
 	return &Service{
-		cfg:                cfg,
-		repo:               repo,
-		geoResolver:        geoResolver,
-		providerHTTPClient: providerHTTPClient,
-		storeProvider:      appstorage.NewRuntimeProvider(cfg, nil),
+		cfg:                 cfg,
+		repo:                repo,
+		geoResolver:         geoResolver,
+		providerHTTPClient:  providerHTTPClient,
+		dingTalkAPIBaseURL:  "https://api.dingtalk.com",
+		dingTalkOAPIBaseURL: "https://oapi.dingtalk.com",
+		dingTalkLoginURL:    "https://login.dingtalk.com/oauth2/auth",
+		dingTalkAppTokens:   make(map[string]dingTalkCachedAppToken),
+		storeProvider:       appstorage.NewRuntimeProvider(cfg, nil),
 	}
 }
 

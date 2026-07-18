@@ -125,6 +125,7 @@ type providerOAuthState struct {
 	RedirectURI   string `json:"redirectURI"`
 	Next          string `json:"next"`
 	Intent        string `json:"intent"`
+	Flow          string `json:"flow,omitempty"`
 	CodeChallenge string `json:"codeChallenge"`
 	Nonce         string `json:"nonce"`
 	ExpiresAt     int64  `json:"expiresAt"`
@@ -342,6 +343,13 @@ func (s *Service) CompleteProviderLogin(
 	if err = validateProviderCodeVerifier(codeVerifier, verifiedState.CodeChallenge); err != nil {
 		return nil, err
 	}
+	if provider.Type == domainuser.IdentityProviderTypeDingTalk {
+		profile, profileErr := s.fetchDingTalkOAuthProfile(ctx, *provider, trimmedCode)
+		if profileErr != nil {
+			return nil, profileErr
+		}
+		return s.completeProviderProfileLogin(ctx, *provider, profile, verifiedState.Intent, requestID, auditCtx)
+	}
 
 	tokenResponse, err := s.exchangeProviderCode(ctx, *provider, trimmedCode, redirectURI, strings.TrimSpace(codeVerifier))
 	if err != nil {
@@ -351,6 +359,17 @@ func (s *Service) CompleteProviderLogin(
 	if err != nil {
 		return nil, err
 	}
+	return s.completeProviderProfileLogin(ctx, *provider, profile, verifiedState.Intent, requestID, auditCtx)
+}
+
+func (s *Service) completeProviderProfileLogin(
+	ctx context.Context,
+	provider domainuser.IdentityProvider,
+	profile map[string]interface{},
+	intent string,
+	requestID string,
+	auditCtx requestmeta.SessionAuditContext,
+) (*LoginResult, error) {
 	profileJSON, _ := json.Marshal(profile)
 	subject := claimString(profile, provider.SubjectField)
 	if subject == "" {
@@ -362,9 +381,9 @@ func (s *Service) CompleteProviderLogin(
 	}
 	displayName := firstNonEmpty(claimString(profile, provider.NameField), email, subject)
 	avatarURL := claimString(profile, provider.AvatarField)
-	emailVerified := resolveProviderEmailVerified(profile, *provider)
+	emailVerified := resolveProviderEmailVerified(profile, provider)
 
-	userItem, err := s.resolveProviderUser(ctx, *provider, subject, email, displayName, avatarURL, emailVerified, string(profileJSON), verifiedState.Intent)
+	userItem, err := s.resolveProviderUser(ctx, provider, subject, email, displayName, avatarURL, emailVerified, string(profileJSON), intent)
 	if err != nil {
 		return nil, err
 	}
@@ -455,6 +474,13 @@ func (s *Service) CompleteProviderBind(
 	if err = validateProviderCodeVerifier(codeVerifier, verifiedState.CodeChallenge); err != nil {
 		return nil, err
 	}
+	if provider.Type == domainuser.IdentityProviderTypeDingTalk {
+		profile, profileErr := s.fetchDingTalkOAuthProfile(ctx, *provider, trimmedCode)
+		if profileErr != nil {
+			return nil, profileErr
+		}
+		return s.completeProviderProfileBind(ctx, userID, *provider, profile, requestID, auditCtx)
+	}
 
 	tokenResponse, err := s.exchangeProviderCode(ctx, *provider, trimmedCode, redirectURI, strings.TrimSpace(codeVerifier))
 	if err != nil {
@@ -464,6 +490,17 @@ func (s *Service) CompleteProviderBind(
 	if err != nil {
 		return nil, err
 	}
+	return s.completeProviderProfileBind(ctx, userID, *provider, profile, requestID, auditCtx)
+}
+
+func (s *Service) completeProviderProfileBind(
+	ctx context.Context,
+	userID uint,
+	provider domainuser.IdentityProvider,
+	profile map[string]interface{},
+	requestID string,
+	auditCtx requestmeta.SessionAuditContext,
+) (*UserIdentityView, error) {
 	profileJSON, _ := json.Marshal(profile)
 	subject := claimString(profile, provider.SubjectField)
 	if subject == "" {
@@ -474,7 +511,7 @@ func (s *Service) CompleteProviderBind(
 		return nil, err
 	}
 	providerDisplayName := firstNonEmpty(claimString(profile, provider.NameField), normalizedEmail, subject)
-	emailVerified := resolveProviderEmailVerified(profile, *provider)
+	emailVerified := resolveProviderEmailVerified(profile, provider)
 	now := time.Now()
 
 	existingIdentity, err := s.repo.GetUserIdentityByProviderSubject(ctx, provider.ID, subject)
@@ -521,7 +558,7 @@ func (s *Service) CompleteProviderBind(
 		}
 	}
 
-	created, err := s.createProviderIdentity(ctx, userID, *provider, subject, providerDisplayName, normalizedEmail, emailVerified, string(profileJSON), now)
+	created, err := s.createProviderIdentity(ctx, userID, provider, subject, providerDisplayName, normalizedEmail, emailVerified, string(profileJSON), now)
 	if err != nil {
 		return nil, err
 	}
@@ -558,8 +595,8 @@ func (s *Service) CompleteProviderBind(
 
 func (s *Service) normalizeProviderInput(input UpsertIdentityProviderInput, current *domainuser.IdentityProvider) (*domainuser.IdentityProvider, error) {
 	providerType := strings.ToLower(strings.TrimSpace(input.Type))
-	if providerType != domainuser.IdentityProviderTypeOIDC && providerType != domainuser.IdentityProviderTypeOAuth2 {
-		return nil, fmt.Errorf("provider type must be oidc or oauth2")
+	if providerType != domainuser.IdentityProviderTypeOIDC && providerType != domainuser.IdentityProviderTypeOAuth2 && providerType != domainuser.IdentityProviderTypeDingTalk {
+		return nil, fmt.Errorf("provider type must be oidc, oauth2 or dingtalk")
 	}
 	name := strings.TrimSpace(input.Name)
 	if name == "" {
@@ -575,6 +612,9 @@ func (s *Service) normalizeProviderInput(input UpsertIdentityProviderInput, curr
 	scopes := strings.TrimSpace(input.Scopes)
 	if scopes == "" && providerType == domainuser.IdentityProviderTypeOIDC {
 		scopes = "openid profile email"
+	}
+	if scopes == "" && providerType == domainuser.IdentityProviderTypeDingTalk {
+		scopes = "openid"
 	}
 	if scopes == "" {
 		scopes = "profile email"
@@ -617,6 +657,20 @@ func (s *Service) normalizeProviderInput(input UpsertIdentityProviderInput, curr
 		AvatarField:         firstNonEmpty(strings.TrimSpace(input.AvatarField), "picture"),
 		SortOrder:           100,
 	}
+	if providerType == domainuser.IdentityProviderTypeDingTalk {
+		provider.Scopes = "openid"
+		provider.SubjectField = "unionId"
+		provider.EmailField = "email"
+		provider.EmailVerifiedField = "emailVerified"
+		provider.NameField = "name"
+		provider.AvatarField = "avatarURL"
+		provider.IssuerURL = ""
+		provider.DiscoveryURL = ""
+		provider.AuthURL = ""
+		provider.TokenURL = ""
+		provider.UserInfoURL = ""
+		provider.JWKSURL = ""
+	}
 	if provider.RegistrationEnabled && !provider.LoginEnabled {
 		return nil, fmt.Errorf("provider registration requires provider login to be enabled")
 	}
@@ -641,7 +695,7 @@ func (s *Service) normalizeProviderInput(input UpsertIdentityProviderInput, curr
 		if provider.IssuerURL == "" && provider.DiscoveryURL == "" {
 			return nil, fmt.Errorf("OIDC issuer url or discovery url is required")
 		}
-	} else if provider.AuthURL == "" || provider.TokenURL == "" || provider.UserInfoURL == "" {
+	} else if providerType == domainuser.IdentityProviderTypeOAuth2 && (provider.AuthURL == "" || provider.TokenURL == "" || provider.UserInfoURL == "") {
 		return nil, fmt.Errorf("OAuth2 auth url, token url and userinfo url are required")
 	}
 	return provider, nil
@@ -822,19 +876,23 @@ func (s *Service) BuildProviderAuthURL(ctx context.Context, slug string, redirec
 			return "", fmt.Errorf("provider registration is disabled")
 		}
 	}
-	authURL, _, _, err := s.resolveProviderEndpoints(ctx, *provider)
-	if err != nil {
-		return "", err
-	}
 	state, err := s.signProviderState(providerOAuthState{
 		Provider:      slug,
 		RedirectURI:   redirectURI,
 		Next:          normalizeProviderNextPath(nextPath),
 		Intent:        normalizedIntent,
+		Flow:          "oauth",
 		CodeChallenge: strings.TrimSpace(codeChallenge),
 		Nonce:         conv.NormalizePublicID(uuid.NewString()),
 		ExpiresAt:     time.Now().Add(10 * time.Minute).Unix(),
 	})
+	if err != nil {
+		return "", err
+	}
+	if provider.Type == domainuser.IdentityProviderTypeDingTalk {
+		return s.buildDingTalkOAuthURL(*provider, redirectURI, state)
+	}
+	authURL, _, _, err := s.resolveProviderEndpoints(ctx, *provider)
 	if err != nil {
 		return "", err
 	}
@@ -1239,6 +1297,20 @@ func (s *Service) signProviderState(state providerOAuthState) (string, error) {
 }
 
 func (s *Service) verifyProviderState(slug string, redirectURI string, rawState string) (*providerOAuthState, error) {
+	state, err := s.verifySignedProviderState(rawState)
+	if err != nil {
+		return nil, err
+	}
+	if state.Provider != slug || state.RedirectURI != redirectURI || (state.Flow != "" && state.Flow != "oauth") {
+		return nil, fmt.Errorf("oauth state mismatch")
+	}
+	if err = s.validateProviderRedirectURI(slug, redirectURI); err != nil {
+		return nil, err
+	}
+	return state, nil
+}
+
+func (s *Service) verifySignedProviderState(rawState string) (*providerOAuthState, error) {
 	parts := strings.Split(strings.TrimSpace(rawState), ".")
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return nil, fmt.Errorf("invalid oauth state")
@@ -1255,14 +1327,8 @@ func (s *Service) verifyProviderState(slug string, redirectURI string, rawState 
 	if err = json.Unmarshal(payload, &state); err != nil {
 		return nil, fmt.Errorf("invalid oauth state")
 	}
-	if state.Provider != slug || state.RedirectURI != redirectURI {
-		return nil, fmt.Errorf("oauth state mismatch")
-	}
 	if time.Now().Unix() > state.ExpiresAt {
 		return nil, fmt.Errorf("oauth state expired")
-	}
-	if err = s.validateProviderRedirectURI(slug, redirectURI); err != nil {
-		return nil, err
 	}
 	return &state, nil
 }

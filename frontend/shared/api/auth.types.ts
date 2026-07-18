@@ -117,7 +117,7 @@ export type LoginPageSettings = {
 
 export type IdentityProviderDTO = {
   publicID: string;
-  type: "oidc" | "oauth2";
+  type: "oidc" | "oauth2" | "dingtalk";
   name: string;
   slug: string;
   logoURL?: string;
@@ -172,6 +172,15 @@ export type LoginOptionsData = {
   turnstileRegistrationEnabled: boolean;
   turnstileSiteKey: string;
   providers: IdentityProviderDTO[];
+};
+
+export type DingTalkWorkbenchStartData = {
+  clientID: string;
+  state: string;
+};
+
+export type DingTalkQRCodeStartData = {
+  authURL: string;
 };
 
 export type MeData = {

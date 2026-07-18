@@ -2,9 +2,11 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -693,6 +695,238 @@ func TestUnlinkCurrentUserIdentityAllowsOneOfMultiplePasswordlessLoginMethods(t 
 	}
 	if len(repo.identities) != 1 || repo.identities[0].ID != 8 {
 		t.Fatalf("expected remaining identity 8, got %#v", repo.identities)
+	}
+}
+
+func TestNormalizeProviderInputSupportsDingTalk(t *testing.T) {
+	service := NewService(config.Config{JWTSecret: "test-secret", DataEncryptionKey: "test-data-key"}, &providerLoginRepo{}, nil)
+
+	provider, err := service.normalizeProviderInput(UpsertIdentityProviderInput{
+		ActorRole:           domainuser.RoleAdmin,
+		Type:                domainuser.IdentityProviderTypeDingTalk,
+		Name:                "DingTalk",
+		ClientID:            "ding-client",
+		ClientSecret:        "ding-secret",
+		RegistrationEnabled: boolPtr(true),
+	}, nil)
+	if err != nil {
+		t.Fatalf("expected DingTalk provider to be accepted, got %v", err)
+	}
+	if provider.Scopes != "openid" || provider.SubjectField != "unionId" || provider.EmailVerifiedField != "emailVerified" {
+		t.Fatalf("unexpected DingTalk defaults: %#v", provider)
+	}
+	if provider.AuthURL != "" || provider.TokenURL != "" || provider.UserInfoURL != "" {
+		t.Fatalf("expected DingTalk provider to avoid generic OAuth endpoints: %#v", provider)
+	}
+}
+
+func TestBuildProviderAuthURLSupportsDingTalkOAuth(t *testing.T) {
+	provider := &domainuser.IdentityProvider{
+		ID:           10,
+		Type:         domainuser.IdentityProviderTypeDingTalk,
+		Name:         "DingTalk",
+		Slug:         "dingtalk",
+		LoginEnabled: true,
+		ClientID:     "ding-client",
+		Scopes:       "openid",
+	}
+	repo := &providerLoginRepo{providersBySlug: map[string]*domainuser.IdentityProvider{"dingtalk": provider}}
+	service := NewService(config.Config{JWTSecret: "test-secret", ThirdPartyLoginEnabled: true}, repo, nil)
+	redirectURI := "http://localhost/auth/callback?provider=dingtalk"
+	codeChallenge := strings.Repeat("a", 43)
+
+	start, err := service.StartDingTalkQRCodeLogin(context.Background(), "dingtalk", redirectURI, "/chat", codeChallenge)
+	if err != nil {
+		t.Fatalf("build DingTalk auth URL: %v", err)
+	}
+	parsed, err := url.Parse(start.AuthURL)
+	if err != nil {
+		t.Fatalf("parse DingTalk auth URL: %v", err)
+	}
+	query := parsed.Query()
+	if parsed.Scheme != "https" || parsed.Host != "login.dingtalk.com" || parsed.Path != "/oauth2/auth" {
+		t.Fatalf("unexpected DingTalk auth endpoint: %s", start.AuthURL)
+	}
+	if query.Get("client_id") != "ding-client" || query.Get("redirect_uri") != redirectURI || query.Get("response_type") != "code" || query.Get("scope") != "openid" {
+		t.Fatalf("unexpected DingTalk auth query: %#v", query)
+	}
+	state, err := service.verifyProviderState("dingtalk", redirectURI, query.Get("state"))
+	if err != nil {
+		t.Fatalf("verify DingTalk OAuth state: %v", err)
+	}
+	if state.CodeChallenge != codeChallenge || state.Flow != "oauth" {
+		t.Fatalf("unexpected DingTalk OAuth state: %#v", state)
+	}
+}
+
+func TestCompleteDingTalkWorkbenchLoginAutoLinksDirectoryEmail(t *testing.T) {
+	dataKey := "test-data-key"
+	clientSecret, err := secretbox.EncryptString(dataKey, "ding-secret")
+	if err != nil {
+		t.Fatalf("encrypt client secret: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v1.0/oauth2/accessToken":
+			var payload map[string]string
+			if decodeErr := json.NewDecoder(r.Body).Decode(&payload); decodeErr != nil {
+				t.Fatalf("decode app token request: %v", decodeErr)
+			}
+			if payload["appKey"] != "ding-client" || payload["appSecret"] != "ding-secret" {
+				t.Fatalf("unexpected app token request: %#v", payload)
+			}
+			_, _ = w.Write([]byte(`{"accessToken":"app-token","expireIn":7200}`))
+		case "/topapi/v2/user/getuserinfo":
+			_ = r.ParseForm()
+			if r.Form.Get("access_token") != "app-token" || r.Form.Get("code") != "workbench-code" {
+				t.Fatalf("unexpected workbench request: %#v", r.Form)
+			}
+			_, _ = w.Write([]byte(`{"errcode":0,"errmsg":"ok","result":{"unionid":"union-1","userid":"user-1","name":"Ding User"}}`))
+		case "/topapi/v2/user/get":
+			_ = r.ParseForm()
+			if r.Form.Get("userid") != "user-1" {
+				t.Fatalf("unexpected directory request: %#v", r.Form)
+			}
+			_, _ = w.Write([]byte(`{"errcode":0,"errmsg":"ok","result":{"unionid":"union-1","userid":"user-1","name":"Ding User","email":"Verified@Example.com","avatar":"https://example.com/avatar.png","active":true}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	provider := &domainuser.IdentityProvider{
+		ID:                  10,
+		Type:                domainuser.IdentityProviderTypeDingTalk,
+		Name:                "DingTalk",
+		Slug:                "dingtalk",
+		LoginEnabled:        true,
+		RegistrationEnabled: true,
+		ClientID:            "ding-client",
+		ClientSecret:        clientSecret,
+		DefaultRole:         domainuser.RoleUser,
+		SubjectField:        "unionId",
+		EmailField:          "email",
+		EmailVerifiedField:  "emailVerified",
+		NameField:           "name",
+		AvatarField:         "avatarURL",
+	}
+	existing := &domainuser.User{ID: 42, Email: "verified@example.com", DisplayName: "Existing User", Status: domainuser.StatusActive, Role: domainuser.RoleUser}
+	repo := &providerLoginRepo{
+		providersBySlug: map[string]*domainuser.IdentityProvider{"dingtalk": provider},
+		usersByEmail:    map[string]*domainuser.User{existing.Email: existing},
+	}
+	service := NewService(config.Config{
+		JWTSecret:              "test-secret",
+		DataEncryptionKey:      dataKey,
+		ThirdPartyLoginEnabled: true,
+		AutoLinkVerifiedEmail:  true,
+	}, repo, nil)
+	service.dingTalkAPIBaseURL = server.URL
+	service.dingTalkOAPIBaseURL = server.URL
+	codeVerifier := strings.Repeat("a", 43)
+	start, err := service.StartDingTalkWorkbenchLogin(context.Background(), "dingtalk", providerCodeChallenge(codeVerifier))
+	if err != nil {
+		t.Fatalf("start workbench login: %v", err)
+	}
+
+	result, err := service.CompleteDingTalkWorkbenchLogin(context.Background(), "dingtalk", "workbench-code", "corp-1", start.State, codeVerifier, "request-id", requestmeta.SessionAuditContext{})
+	if err != nil {
+		t.Fatalf("complete workbench login: %v", err)
+	}
+	if result.User.ID != existing.ID {
+		t.Fatalf("expected existing user %d, got %#v", existing.ID, result.User)
+	}
+	if len(repo.identities) != 1 || repo.identities[0].ProviderSubject != "union-1" || repo.identities[0].Email != existing.Email || !repo.identities[0].EmailVerified {
+		t.Fatalf("expected verified DingTalk identity linked to existing user, got %#v", repo.identities)
+	}
+}
+
+func TestCompleteProviderLoginDingTalkOAuthUsesEnterpriseDirectoryProfile(t *testing.T) {
+	dataKey := "test-data-key"
+	clientSecret, err := secretbox.EncryptString(dataKey, "ding-secret")
+	if err != nil {
+		t.Fatalf("encrypt client secret: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v1.0/oauth2/userAccessToken":
+			var payload map[string]string
+			if decodeErr := json.NewDecoder(r.Body).Decode(&payload); decodeErr != nil {
+				t.Fatalf("decode user token request: %v", decodeErr)
+			}
+			if payload["clientId"] != "ding-client" || payload["clientSecret"] != "ding-secret" || payload["code"] != "oauth-code" || payload["grantType"] != "authorization_code" {
+				t.Fatalf("unexpected user token request: %#v", payload)
+			}
+			_, _ = w.Write([]byte(`{"accessToken":"user-token","refreshToken":"refresh-token","expireIn":7200}`))
+		case "/v1.0/contact/users/me":
+			if r.Header.Get("x-acs-dingtalk-access-token") != "user-token" {
+				t.Fatalf("unexpected user token header %q", r.Header.Get("x-acs-dingtalk-access-token"))
+			}
+			_, _ = w.Write([]byte(`{"unionId":"union-1","nick":"Personal Name","email":"personal@example.com"}`))
+		case "/v1.0/oauth2/accessToken":
+			_, _ = w.Write([]byte(`{"accessToken":"app-token","expireIn":7200}`))
+		case "/topapi/user/getbyunionid":
+			_, _ = w.Write([]byte(`{"errcode":0,"errmsg":"ok","result":{"userid":"user-1"}}`))
+		case "/topapi/v2/user/get":
+			_, _ = w.Write([]byte(`{"errcode":0,"errmsg":"ok","result":{"unionid":"union-1","userid":"user-1","name":"Directory Name","org_email":"Existing@Example.com","active":true}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	provider := &domainuser.IdentityProvider{
+		ID:                  10,
+		Type:                domainuser.IdentityProviderTypeDingTalk,
+		Name:                "DingTalk",
+		Slug:                "dingtalk",
+		LoginEnabled:        true,
+		RegistrationEnabled: true,
+		ClientID:            "ding-client",
+		ClientSecret:        clientSecret,
+		Scopes:              "openid",
+		DefaultRole:         domainuser.RoleUser,
+		SubjectField:        "unionId",
+		EmailField:          "email",
+		EmailVerifiedField:  "emailVerified",
+		NameField:           "name",
+		AvatarField:         "avatarURL",
+	}
+	existing := &domainuser.User{ID: 42, Email: "existing@example.com", DisplayName: "Existing User", Status: domainuser.StatusActive, Role: domainuser.RoleUser}
+	repo := &providerLoginRepo{
+		providersBySlug: map[string]*domainuser.IdentityProvider{"dingtalk": provider},
+		usersByEmail:    map[string]*domainuser.User{existing.Email: existing},
+	}
+	service := NewService(config.Config{
+		JWTSecret:              "test-secret",
+		DataEncryptionKey:      dataKey,
+		ThirdPartyLoginEnabled: true,
+		AutoLinkVerifiedEmail:  true,
+	}, repo, nil)
+	service.dingTalkAPIBaseURL = server.URL
+	service.dingTalkOAPIBaseURL = server.URL
+	redirectURI := "http://localhost/auth/callback?provider=dingtalk"
+	codeVerifier := strings.Repeat("a", 43)
+	state, err := service.signProviderState(providerOAuthState{
+		Provider:      "dingtalk",
+		RedirectURI:   redirectURI,
+		Intent:        providerIntentLogin,
+		Flow:          "oauth",
+		CodeChallenge: providerCodeChallenge(codeVerifier),
+		ExpiresAt:     time.Now().Add(time.Minute).Unix(),
+	})
+	if err != nil {
+		t.Fatalf("sign provider state: %v", err)
+	}
+
+	result, err := service.CompleteProviderLogin(context.Background(), "dingtalk", "oauth-code", state, redirectURI, codeVerifier, providerIntentLogin, "request-id", requestmeta.SessionAuditContext{})
+	if err != nil {
+		t.Fatalf("complete DingTalk OAuth login: %v", err)
+	}
+	if result.User.ID != existing.ID || len(repo.identities) != 1 || repo.identities[0].ProviderSubject != "union-1" {
+		t.Fatalf("expected DingTalk OAuth to link existing user by directory email, result=%#v identities=%#v", result.User, repo.identities)
 	}
 }
 

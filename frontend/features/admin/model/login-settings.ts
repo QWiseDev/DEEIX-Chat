@@ -137,6 +137,20 @@ export const DEFAULT_PROVIDER_FORM: IdentityProviderPayload = {
 
 export const PROVIDER_TEMPLATES: ProviderTemplate[] = [
   {
+    label: "DingTalk",
+    form: {
+      type: "dingtalk",
+      name: "DingTalk",
+      slug: "dingtalk",
+      scopes: "openid",
+      subjectField: "unionId",
+      emailField: "email",
+      emailVerifiedField: "emailVerified",
+      nameField: "name",
+      avatarField: "avatarURL",
+    },
+  },
+  {
     label: "Apple",
     form: {
       type: "oidc",

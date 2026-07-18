@@ -175,7 +175,7 @@ func (UserAuthEvent) TableName() string {
 type AuthIdentityProvider struct {
 	BaseModel
 	PublicID              string `gorm:"size:32;not null;default:'';uniqueIndex:idx_identity_providers_public_id;comment:公开ID"`
-	Type                  string `gorm:"size:16;not null;default:'';index:idx_identity_providers_type;comment:类型(oidc/oauth2)"`
+	Type                  string `gorm:"size:16;not null;default:'';index:idx_identity_providers_type;comment:类型(oidc/oauth2/dingtalk)"`
 	Name                  string `gorm:"size:80;not null;default:'';comment:显示名称"`
 	Slug                  string `gorm:"size:64;not null;default:'';uniqueIndex:idx_identity_providers_slug;comment:登录入口标识"`
 	LogoURL               string `gorm:"size:512;not null;default:'';comment:自定义 Logo 地址"`

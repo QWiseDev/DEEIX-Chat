@@ -7,6 +7,8 @@ import type {
   ChangePasswordPayload,
   CompleteOnboardingPayload,
   DeleteAccountPayload,
+  DingTalkQRCodeStartData,
+  DingTalkWorkbenchStartData,
   EmailBootstrapCompletePayload,
   EmailChangeCompletePayload,
   EmailVerificationStartData,
@@ -44,6 +46,38 @@ export async function login(username: string, password: string): Promise<LoginDa
   return apiRequest<LoginData>("/api/v1/auth/login", {
     method: "POST",
     body: { username, password },
+  });
+}
+
+export async function startDingTalkWorkbenchLogin(slug: string, codeChallenge: string): Promise<DingTalkWorkbenchStartData> {
+  return apiRequest<DingTalkWorkbenchStartData>(`/api/v1/auth/providers/${pathParam(slug)}/dingtalk/workbench/start`, {
+    method: "POST",
+    body: { codeChallenge },
+  });
+}
+
+export async function startDingTalkQRCodeLogin(
+  slug: string,
+  redirectURI: string,
+  next: string,
+  codeChallenge: string,
+): Promise<DingTalkQRCodeStartData> {
+  return apiRequest<DingTalkQRCodeStartData>(`/api/v1/auth/providers/${pathParam(slug)}/dingtalk/qr/start`, {
+    method: "POST",
+    body: { redirectURI, next, codeChallenge },
+  });
+}
+
+export async function completeDingTalkWorkbenchLogin(
+  slug: string,
+  code: string,
+  corpID: string,
+  state: string,
+  codeVerifier: string,
+): Promise<LoginData> {
+  return apiRequest<LoginData>(`/api/v1/auth/providers/${pathParam(slug)}/dingtalk/workbench/complete`, {
+    method: "POST",
+    body: { code, corpID, state, codeVerifier },
   });
 }
 

@@ -32,6 +32,15 @@
   "resendIn": "Resend in {seconds}s",
   "debugCode": "Dev code: {code}",
   "providerLogin": "Continue with {provider}",
+  "dingtalkQRCode": {
+    "entry": "Scan to sign in with {provider}",
+    "title": "Scan to sign in with {provider}",
+    "description": "Scan the QR code with DingTalk and confirm the sign-in on your phone.",
+    "loading": "Loading the DingTalk sign-in QR code",
+    "loadFailed": "The QR code could not be loaded. Use the DingTalk authorization page instead.",
+    "failed": "DingTalk QR sign-in failed. Scan again or open the authorization page.",
+    "openPage": "Open DingTalk authorization page"
+  },
   "alreadyHaveAccount": "Already have an account?",
   "noAccount": "No account?",
   "toasts": {
@@ -40,6 +49,8 @@
     "loginRetry": "Sign-in failed. Please try again later.",
     "challengeExpired": "Two-factor verification expired. Sign in again.",
     "providerStartFailed": "Unable to start third-party sign-in. Refresh the page and try again.",
+    "dingtalkCorpIDMissing": "The DingTalk workbench URL is missing the enterprise CorpID.",
+    "dingtalkLoginFailed": "DingTalk sign-in failed. Please try again.",
     "codeSendFailed": "Failed to send verification code.",
     "turnstileRequired": "Complete the human verification first.",
     "passwordInvalid": "Password must be at least 8 characters and not digits only.",

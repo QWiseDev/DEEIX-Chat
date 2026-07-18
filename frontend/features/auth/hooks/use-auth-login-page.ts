@@ -5,8 +5,8 @@ import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 
-import { completeEmailRegistration, completePasswordReset, getLoginOptions, getLoginPageSettings, login, startEmailRegistration, startPasswordReset, startTwoFactorEmailVerification, verifyTwoFactorLogin } from "@/shared/api/auth";
-import type { LoginOptionsData, LoginPageSettings, SecurityVerificationMethod } from "@/shared/api/auth.types";
+import { completeDingTalkWorkbenchLogin, completeEmailRegistration, completePasswordReset, getLoginOptions, getLoginPageSettings, login, startDingTalkQRCodeLogin, startDingTalkWorkbenchLogin, startEmailRegistration, startPasswordReset, startTwoFactorEmailVerification, verifyTwoFactorLogin } from "@/shared/api/auth";
+import type { IdentityProviderDTO, LoginOptionsData, LoginPageSettings, SecurityVerificationMethod } from "@/shared/api/auth.types";
 import { resolveApiBaseURL } from "@/shared/api/http-client";
 import { isPasswordPolicyValid } from "@/shared/auth/account-policy";
 import { normalizeAuthNextPath } from "@/shared/auth/local-path";
@@ -31,7 +31,21 @@ type UseLoginPageInput = {
   nextPath: string;
 };
 
+type DingTalkQRCodeLogin = {
+  authURL: string;
+  providerName: string;
+};
+
 const VERIFICATION_CODE_RESEND_COOLDOWN_MS = 60_000;
+
+function isDingTalkClient(): boolean {
+  return typeof navigator !== "undefined" && /DingTalk/i.test(navigator.userAgent);
+}
+
+function resolveDingTalkCorpID(): string {
+  const params = new URLSearchParams(window.location.search);
+  return (params.get("corpId") ?? params.get("corpid") ?? "").trim();
+}
 
 function parseSecurityVerificationMethods(value: string | null): SecurityVerificationMethod[] {
   if (!value) {
@@ -81,6 +95,8 @@ export function useLoginPage({ nextPath }: UseLoginPageInput) {
   const [resetCodeResendAt, setResetCodeResendAt] = React.useState(0);
   const [twoFactorEmailCodeResendAt, setTwoFactorEmailCodeResendAt] = React.useState(0);
   const [cooldownNow, setCooldownNow] = React.useState(() => Date.now());
+  const [dingTalkQRCodeLogin, setDingTalkQRCodeLogin] = React.useState<DingTalkQRCodeLogin | null>(null);
+  const dingTalkAutoLoginAttemptedRef = React.useRef(false);
   const registerCodeCooldownSeconds = Math.max(0, Math.ceil((registerCodeResendAt - cooldownNow) / 1000));
   const resetCodeCooldownSeconds = Math.max(0, Math.ceil((resetCodeResendAt - cooldownNow) / 1000));
   const twoFactorEmailCodeCooldownSeconds = Math.max(0, Math.ceil((twoFactorEmailCodeResendAt - cooldownNow) / 1000));
@@ -169,6 +185,23 @@ export function useLoginPage({ nextPath }: UseLoginPageInput) {
     router.replace(resolvedNextPath);
   }, [resolvedNextPath, router]);
 
+  const completeDingTalkAuth = React.useCallback((result: Awaited<ReturnType<typeof completeDingTalkWorkbenchLogin>>) => {
+    if (result.twoFactorRequired) {
+      const methods: SecurityVerificationMethod[] = result.verificationMethods?.length ? result.verificationMethods : ["two_factor"];
+      setTwoFactorChallengeToken(result.twoFactorChallengeToken ?? "");
+      setTwoFactorVerificationMethods(methods);
+      setTwoFactorVerificationMethod(methods[0] ?? "two_factor");
+      setTwoFactorCode("");
+      setTwoFactorEmailDebugCode("");
+      setMode("login");
+      return;
+    }
+    if (!result.accessToken) {
+      throw new Error(t("toasts.loginFailed"));
+    }
+    completeAuth(result.accessToken, result.sessionID);
+  }, [completeAuth, t]);
+
   const resetRegisterTurnstile = React.useCallback(() => {
     setRegisterTurnstileToken("");
     setRegisterTurnstileResetSignal((current) => current + 1);
@@ -230,7 +263,50 @@ export function useLoginPage({ nextPath }: UseLoginPageInput) {
     [completeAuth, password, resolveErrorMessage, submitting, t, twoFactorChallengeToken, twoFactorCode, twoFactorVerificationMethod, username],
   );
 
+  const performDingTalkWorkbenchLogin = React.useCallback(async (provider: IdentityProviderDTO) => {
+    const corpID = resolveDingTalkCorpID();
+    if (!corpID) {
+      throw new Error(t("toasts.dingtalkCorpIDMissing"));
+    }
+    const pkce = await createProviderPKCE();
+    const start = await startDingTalkWorkbenchLogin(provider.slug, pkce.challenge);
+    const dingTalk = await import("dingtalk-jsapi");
+    const auth = await dingTalk.default.requestAuthCode({ corpId: corpID, clientId: start.clientID });
+    const result = await completeDingTalkWorkbenchLogin(provider.slug, auth.code, corpID, start.state, pkce.verifier);
+    completeDingTalkAuth(result);
+  }, [completeDingTalkAuth, t]);
+
   const handleProviderLogin = React.useCallback(async (slug: string, intent: ProviderAuthIntent = "login") => {
+    if (submitting) {
+      return;
+    }
+    const provider = loginProviders.find((item) => item.slug === slug);
+    if (provider?.type === "dingtalk" && isDingTalkClient()) {
+      setSubmitting(true);
+      try {
+        await performDingTalkWorkbenchLogin(provider);
+      } catch (error) {
+        toast.error(resolveErrorMessage(error, t("toasts.dingtalkLoginFailed")));
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
+    if (provider?.type === "dingtalk") {
+      setSubmitting(true);
+      try {
+        const redirectURI = `${window.location.origin}/auth/callback?provider=${encodeURIComponent(slug)}`;
+        const pkce = await createProviderPKCE();
+        window.sessionStorage.setItem(providerPKCEStorageKey(slug), pkce.verifier);
+        const start = await startDingTalkQRCodeLogin(slug, redirectURI, resolvedNextPath, pkce.challenge);
+        setDingTalkQRCodeLogin({ authURL: start.authURL, providerName: provider.name });
+      } catch (error) {
+        toast.error(resolveErrorMessage(error, t("toasts.dingtalkLoginFailed")));
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
     try {
       const params = new URLSearchParams();
       const redirectURI = `${window.location.origin}/auth/callback?provider=${encodeURIComponent(slug)}`;
@@ -245,7 +321,23 @@ export function useLoginPage({ nextPath }: UseLoginPageInput) {
     } catch {
       toast.error(t("toasts.providerStartFailed"));
     }
-  }, [resolvedNextPath, t]);
+  }, [loginProviders, performDingTalkWorkbenchLogin, resolveErrorMessage, resolvedNextPath, submitting, t]);
+
+  const closeDingTalkQRCodeLogin = React.useCallback(() => {
+    setDingTalkQRCodeLogin(null);
+  }, []);
+
+  React.useEffect(() => {
+    if (!configReady || submitting || twoFactorChallengeToken || dingTalkAutoLoginAttemptedRef.current || !isDingTalkClient()) {
+      return;
+    }
+    const provider = loginProviders.find((item) => item.type === "dingtalk");
+    if (!provider || !resolveDingTalkCorpID()) {
+      return;
+    }
+    dingTalkAutoLoginAttemptedRef.current = true;
+    void handleProviderLogin(provider.slug);
+  }, [configReady, handleProviderLogin, loginProviders, submitting, twoFactorChallengeToken]);
 
   const requestRegisterCode = React.useCallback(async () => {
     if (!emailVerificationEnabled || sendingCode || registerCodeCooldownSeconds > 0) {
@@ -430,6 +522,8 @@ export function useLoginPage({ nextPath }: UseLoginPageInput) {
   return {
     codeSent,
     configReady,
+    closeDingTalkQRCodeLogin,
+    dingTalkQRCodeLogin,
     emailRegistrationEnabled,
     emailVerificationEnabled,
     handleProviderLogin,

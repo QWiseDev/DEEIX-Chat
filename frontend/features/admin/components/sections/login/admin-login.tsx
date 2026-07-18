@@ -248,9 +248,12 @@ export function AdminLoginSettingsPage() {
     [configuredMap, savedMap, settingsMap, t],
   );
 
-  const openCreateProvider = React.useCallback((type: "oidc" | "oauth2") => {
+  const openCreateProvider = React.useCallback((type: IdentityProviderPayload["type"]) => {
     setEditingProvider(null);
-    setProviderForm(createProviderForm({ type, scopes: type === "oidc" ? "openid profile email" : "profile email" }));
+    setProviderForm(createProviderForm({
+      type,
+      scopes: type === "oidc" ? "openid profile email" : type === "dingtalk" ? "openid" : "profile email",
+    }));
     setOidcEndpointMode("issuer");
     setProviderDialogOpen(true);
   }, []);
@@ -386,6 +389,7 @@ export function AdminLoginSettingsPage() {
   const oidcEndpointValue = oidcEndpointMode === "discovery" ? (providerForm.discoveryURL ?? "") : (providerForm.issuerURL ?? "");
   const callbackSlug = providerForm.slug?.trim() || normalizeProviderSlugPreview(providerForm.name) || "provider";
   const callbackURL = `${frontendOrigin || "http://localhost:3000"}/auth/callback?provider=${encodeURIComponent(callbackSlug)}`;
+  const dingTalkWorkbenchURL = `${frontendOrigin || "http://localhost:3000"}/login?corpId=$CORPID$`;
 
   return (
     <SettingsPage>
@@ -684,7 +688,7 @@ export function AdminLoginSettingsPage() {
               <Select
                 value={providerForm.type}
                 onValueChange={(value) => {
-                  const type = value as "oidc" | "oauth2";
+                  const type = value as IdentityProviderPayload["type"];
                   setProviderForm((prev) => ({ ...prev, type }));
                   if (type === "oidc") setOidcEndpointMode(providerForm.discoveryURL ? "discovery" : "issuer");
                 }}
@@ -693,6 +697,7 @@ export function AdminLoginSettingsPage() {
                 <SelectContent>
                   <SelectItem value="oidc">OIDC</SelectItem>
                   <SelectItem value="oauth2">OAuth2</SelectItem>
+                  <SelectItem value="dingtalk">DingTalk</SelectItem>
                 </SelectContent>
               </Select>
             </label>
@@ -716,6 +721,24 @@ export function AdminLoginSettingsPage() {
                 />
               </div>
             </label>
+            {providerForm.type === "dingtalk" ? (
+              <label className="col-span-2 space-y-1 text-sm">
+                <span className="text-xs text-muted-foreground">{t("providerDialog.dingtalkWorkbenchURL")}</span>
+                <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+                  <Input value={dingTalkWorkbenchURL} disabled readOnly />
+                  <CopyActionButton
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="text-muted-foreground shadow-none"
+                    value={dingTalkWorkbenchURL}
+                    messages={{ copied: t("toast.callbackCopied"), failed: commonT("errors.copyFailed") }}
+                    aria-label={t("providerDialog.copyDingtalkWorkbenchURL")}
+                    title={t("providerDialog.copyDingtalkWorkbenchURL")}
+                  />
+                </div>
+              </label>
+            ) : null}
             <label className="col-span-2 space-y-1 text-sm">
               <span className="text-xs text-muted-foreground">{t("providerDialog.logoURL")}</span>
               <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
@@ -775,16 +798,18 @@ export function AdminLoginSettingsPage() {
                   />
                 </div>
               </label>
-            ) : (
+            ) : providerForm.type === "oauth2" ? (
               <>
                 <label className="col-span-2 space-y-1 text-sm"><span className="text-xs text-muted-foreground">{t("providerDialog.authURL")}<RequiredMark /></span><Input value={providerForm.authURL ?? ""} onChange={(event) => setProviderForm((prev) => ({ ...prev, authURL: event.target.value }))} /></label>
                 <label className="col-span-2 space-y-1 text-sm"><span className="text-xs text-muted-foreground">{t("providerDialog.tokenURL")}<RequiredMark /></span><Input value={providerForm.tokenURL ?? ""} onChange={(event) => setProviderForm((prev) => ({ ...prev, tokenURL: event.target.value }))} /></label>
                 <label className="col-span-2 space-y-1 text-sm"><span className="text-xs text-muted-foreground">{t("providerDialog.userinfoURL")}<RequiredMark /></span><Input value={providerForm.userinfoURL ?? ""} onChange={(event) => setProviderForm((prev) => ({ ...prev, userinfoURL: event.target.value }))} /></label>
               </>
-            )}
-            <label className="col-span-2 space-y-1 text-sm"><span className="text-xs text-muted-foreground">{t("providerDialog.scopes")}</span><Input value={providerForm.scopes ?? ""} onChange={(event) => setProviderForm((prev) => ({ ...prev, scopes: event.target.value }))} /></label>
-            <Separator className="col-span-2 my-2" />
-            <Accordion type="single" collapsible className="col-span-2 -mt-1">
+            ) : null}
+            {providerForm.type !== "dingtalk" ? (
+              <label className="col-span-2 space-y-1 text-sm"><span className="text-xs text-muted-foreground">{t("providerDialog.scopes")}</span><Input value={providerForm.scopes ?? ""} onChange={(event) => setProviderForm((prev) => ({ ...prev, scopes: event.target.value }))} /></label>
+            ) : null}
+            {providerForm.type !== "dingtalk" ? <Separator className="col-span-2 my-2" /> : null}
+            {providerForm.type !== "dingtalk" ? <Accordion type="single" collapsible className="col-span-2 -mt-1">
               <AccordionItem value="claim-mapping" className="border-b-0">
                 <AccordionTrigger className="py-1 text-xs hover:no-underline">{t("providerDialog.advancedSettings")}</AccordionTrigger>
                 <AccordionContent className="space-y-3 pb-0 pt-2">
@@ -845,7 +870,7 @@ export function AdminLoginSettingsPage() {
                   </div>
                 </AccordionContent>
               </AccordionItem>
-            </Accordion>
+            </Accordion> : null}
           </div>
           <DialogFooter className="shrink-0 px-4 py-3">
             <Button variant="ghost" onClick={() => setProviderDialogOpen(false)}>{commonT("actions.cancel")}</Button>

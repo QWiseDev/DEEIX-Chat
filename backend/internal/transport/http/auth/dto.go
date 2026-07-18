@@ -221,7 +221,7 @@ type LoginOptionsResponse struct {
 }
 
 type UpsertIdentityProviderRequest struct {
-	Type                string `json:"type" binding:"required,oneof=oidc oauth2"`
+	Type                string `json:"type" binding:"required,oneof=oidc oauth2 dingtalk"`
 	Name                string `json:"name" binding:"required,max=80"`
 	Slug                string `json:"slug" binding:"omitempty,max=64"`
 	LogoURL             string `json:"logoURL" binding:"omitempty,max=512"`
@@ -254,6 +254,32 @@ type CompleteProviderLoginRequest struct {
 	RedirectURI  string `json:"redirectURI" binding:"required,max=2048"`
 	CodeVerifier string `json:"codeVerifier" binding:"required,min=43,max=128"`
 	Intent       string `json:"intent" binding:"omitempty,oneof=login register bind"`
+}
+
+type StartDingTalkWorkbenchLoginRequest struct {
+	CodeChallenge string `json:"codeChallenge" binding:"required,min=43,max=128"`
+}
+
+type CompleteDingTalkWorkbenchLoginRequest struct {
+	Code         string `json:"code" binding:"required"`
+	CorpID       string `json:"corpID" binding:"required,max=128"`
+	State        string `json:"state" binding:"required,max=4096"`
+	CodeVerifier string `json:"codeVerifier" binding:"required,min=43,max=128"`
+}
+
+type DingTalkWorkbenchStartResponse struct {
+	ClientID string `json:"clientID"`
+	State    string `json:"state"`
+}
+
+type StartDingTalkQRCodeLoginRequest struct {
+	RedirectURI   string `json:"redirectURI" binding:"required,max=2048"`
+	Next          string `json:"next" binding:"omitempty,max=2048"`
+	CodeChallenge string `json:"codeChallenge" binding:"required,min=43,max=128"`
+}
+
+type DingTalkQRCodeStartResponse struct {
+	AuthURL string `json:"authURL"`
 }
 
 type CompleteProviderBindRequest struct {

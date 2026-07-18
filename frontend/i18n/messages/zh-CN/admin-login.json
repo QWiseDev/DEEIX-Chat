@@ -124,7 +124,7 @@
     }
   },
   "providers": {
-    "title": "OIDC / OAuth2 身份源",
+    "title": "OIDC / OAuth2 / 钉钉身份源",
     "create": "新增身份源",
     "customOIDC": "自定义 OIDC",
     "customOAuth2": "自定义 OAuth2",
@@ -147,6 +147,8 @@
     "registrationControlDescription": "允许自动创建账号",
     "callbackURL": "回调地址",
     "copyCallbackURL": "复制回调地址",
+    "dingtalkWorkbenchURL": "钉钉工作台应用首页地址",
+    "copyDingtalkWorkbenchURL": "复制钉钉工作台地址",
     "logoURL": "Logo URL",
     "clientID": "Client ID",
     "clientSecret": "Client Secret",

@@ -62,6 +62,8 @@
     "providerSubjectMissing": "第三方账号缺少唯一身份标识。",
     "providerTypeInvalid": "身份源类型无效。",
     "providerUpstreamFailed": "第三方身份源请求失败。",
+    "dingtalkCorpIdRequired": "缺少钉钉企业 CorpID。",
+    "dingtalkEnterpriseMemberRequired": "当前钉钉用户不是该企业成员。",
     "sessionInvalid": "登录状态已失效，请重新登录。",
     "superadminRequired": "需要超级管理员权限。",
     "twoFactorAlreadyEnabled": "两步验证已启用。",

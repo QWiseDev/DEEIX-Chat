@@ -16,6 +16,9 @@ func (m *Module) RegisterPublicRoutes(api *gin.RouterGroup) {
 	api.GET("/auth/providers/:slug/start", m.Handler.StartProviderLogin)
 	api.GET("/auth/providers/:slug/callback", m.Handler.ProviderCallback)
 	api.POST("/auth/providers/:slug/callback", m.Handler.CompleteProviderLogin)
+	api.POST("/auth/providers/:slug/dingtalk/workbench/start", m.Handler.StartDingTalkWorkbenchLogin)
+	api.POST("/auth/providers/:slug/dingtalk/workbench/complete", m.Handler.CompleteDingTalkWorkbenchLogin)
+	api.POST("/auth/providers/:slug/dingtalk/qr/start", m.Handler.StartDingTalkQRCodeLogin)
 }
 
 // RegisterProtectedRoutes 注册需登录的鉴权路由。

@@ -124,7 +124,7 @@
     }
   },
   "providers": {
-    "title": "OIDC / OAuth2 identity providers",
+    "title": "OIDC / OAuth2 / DingTalk identity providers",
     "create": "Add identity provider",
     "customOIDC": "Custom OIDC",
     "customOAuth2": "Custom OAuth2",
@@ -147,6 +147,8 @@
     "registrationControlDescription": "Allow automatic account creation.",
     "callbackURL": "Callback URL",
     "copyCallbackURL": "Copy URL",
+    "dingtalkWorkbenchURL": "DingTalk workbench app URL",
+    "copyDingtalkWorkbenchURL": "Copy DingTalk workbench URL",
     "logoURL": "Logo URL",
     "clientID": "Client ID",
     "clientSecret": "Client Secret",

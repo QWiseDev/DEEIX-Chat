@@ -3,7 +3,7 @@ import { pathParam } from "@/shared/api/http-client";
 import type { IdentityProviderDTO } from "@/shared/api/auth.types";
 
 export type IdentityProviderPayload = {
-  type: "oidc" | "oauth2";
+  type: "oidc" | "oauth2" | "dingtalk";
   name: string;
   slug?: string;
   logoURL?: string;
