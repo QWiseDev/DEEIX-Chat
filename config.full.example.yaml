@@ -42,7 +42,7 @@ branding:
   pwa_icon_512_url: /pwa/icon-512.png
   pwa_maskable_icon_512_url: /pwa/icon-maskable-512.png
   apple_touch_icon_180_url: /pwa/apple-touch-icon.png
-  
+
 database:
   # Required. PostgreSQL is used for this profile.
   driver: postgres
