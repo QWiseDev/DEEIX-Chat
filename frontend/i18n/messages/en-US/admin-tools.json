@@ -121,6 +121,8 @@
     "name": "Server name",
     "namePlaceholder": "Server name",
     "status": "Server status",
+    "defaultSelected": "Selected by default",
+    "defaultSelectedDescription": "For new chats without personal MCP defaults, automatically select enabled tools from this server.",
     "url": "Server URL",
     "authToken": "Auth token",
     "authTokenCreatePlaceholder": "Optional",

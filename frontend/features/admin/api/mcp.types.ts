@@ -6,6 +6,7 @@ export type AdminMCPServerDTO = {
   baseURL: string;
   headersJSON: string;
   status: string;
+  defaultSelected: boolean;
   sortOrder: number;
   toolCount: number;
   activeToolCount: number;
@@ -21,6 +22,7 @@ export type AdminMCPServerPayload = {
   authToken?: string;
   headersJSON: string;
   status: string;
+  defaultSelected: boolean;
 };
 
 export type AdminMCPServerListResponse = {

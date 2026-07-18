@@ -121,6 +121,8 @@
     "name": "服务名称",
     "namePlaceholder": "服务名称",
     "status": "服务状态",
+    "defaultSelected": "默认选中",
+    "defaultSelectedDescription": "新聊天未设置个人 MCP 默认工具时，自动选中该服务下已启用的工具。",
     "url": "服务地址",
     "authToken": "鉴权密钥",
     "authTokenCreatePlaceholder": "可留空",

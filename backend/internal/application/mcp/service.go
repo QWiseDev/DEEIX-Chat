@@ -48,11 +48,12 @@ type systemEventWriter interface {
 }
 
 type ServerInput struct {
-	Name        string
-	BaseURL     string
-	AuthToken   string
-	HeadersJSON string
-	Status      string
+	Name            string
+	BaseURL         string
+	AuthToken       string
+	HeadersJSON     string
+	Status          string
+	DefaultSelected bool
 }
 
 type ToolInput struct {
@@ -95,11 +96,12 @@ func (s *Service) CreateServer(ctx context.Context, input ServerInput) (*domainm
 		return nil, err
 	}
 	return s.repo.CreateServer(ctx, repository.CreateMCPServerInput{
-		Name:         normalized.Name,
-		BaseURL:      normalized.BaseURL,
-		AuthTokenEnc: tokenEnc,
-		HeadersJSON:  normalized.HeadersJSON,
-		Status:       normalized.Status,
+		Name:            normalized.Name,
+		BaseURL:         normalized.BaseURL,
+		AuthTokenEnc:    tokenEnc,
+		HeadersJSON:     normalized.HeadersJSON,
+		Status:          normalized.Status,
+		DefaultSelected: normalized.DefaultSelected,
 	})
 }
 
@@ -109,10 +111,11 @@ func (s *Service) UpdateServer(ctx context.Context, serverID uint, input ServerI
 		return nil, err
 	}
 	update := repository.UpdateMCPServerInput{
-		Name:        &normalized.Name,
-		BaseURL:     &normalized.BaseURL,
-		HeadersJSON: &normalized.HeadersJSON,
-		Status:      &normalized.Status,
+		Name:            &normalized.Name,
+		BaseURL:         &normalized.BaseURL,
+		HeadersJSON:     &normalized.HeadersJSON,
+		Status:          &normalized.Status,
+		DefaultSelected: &normalized.DefaultSelected,
 	}
 	if normalized.AuthToken != "" {
 		tokenEnc, encryptErr := s.encryptToken(normalized.AuthToken)
@@ -243,6 +246,7 @@ func (s *Service) ListAvailableTools(ctx context.Context) ([]domainmcp.Tool, err
 		}
 		for _, tool := range tools {
 			tool.ServerName = server.Name
+			tool.ServerDefaultSelected = server.DefaultSelected
 			result = append(result, tool)
 		}
 	}
@@ -365,11 +369,12 @@ func (s *Service) normalizeServerInput(input ServerInput, requireToken bool) (Se
 		input.AuthToken = strings.TrimSpace(input.AuthToken)
 	}
 	return ServerInput{
-		Name:        name,
-		BaseURL:     baseURL,
-		AuthToken:   strings.TrimSpace(input.AuthToken),
-		HeadersJSON: headersJSON,
-		Status:      status,
+		Name:            name,
+		BaseURL:         baseURL,
+		AuthToken:       strings.TrimSpace(input.AuthToken),
+		HeadersJSON:     headersJSON,
+		Status:          status,
+		DefaultSelected: input.DefaultSelected,
 	}, nil
 }
 

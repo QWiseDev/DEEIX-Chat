@@ -159,6 +159,17 @@ function filterAvailableMCPToolIDs(toolIDs: number[], tools: MCPToolDTO[], limit
   return typeof limit === "number" && limit >= 0 ? result.slice(0, limit) : result;
 }
 
+function resolveInitialDefaultMCPToolIDs(settings: Record<string, string>, tools: MCPToolDTO[]): number[] {
+  const userDefaultToolIDs = filterAvailableMCPToolIDs(
+    parseDefaultMCPToolIDs(settings[DEFAULT_MCP_TOOLS_SETTING_KEY]),
+    tools,
+  );
+  if (userDefaultToolIDs.length > 0) {
+    return userDefaultToolIDs;
+  }
+  return tools.filter((tool) => tool.serverDefaultSelected === true).map((tool) => tool.id);
+}
+
 export function AppChatArea() {
   const t = useTranslations("chat");
   const tRecent = useTranslations("recent");
@@ -492,12 +503,9 @@ export function AppChatArea() {
           return;
         }
         const tools = normalizeAvailableMCPTools(toolsResult);
-        const userDefaultToolIDs = filterAvailableMCPToolIDs(
-          parseDefaultMCPToolIDs(settings[DEFAULT_MCP_TOOLS_SETTING_KEY]),
-          tools,
-        );
+        const initialDefaultToolIDs = resolveInitialDefaultMCPToolIDs(settings, tools);
         setAvailableTools(tools);
-        setDefaultToolIDs(userDefaultToolIDs);
+        setDefaultToolIDs(initialDefaultToolIDs);
         const availableIDs = new Set(tools.map((item) => item.id));
         setSelectedToolIDs((previous) => previous.filter((id) => availableIDs.has(id)));
       } catch {

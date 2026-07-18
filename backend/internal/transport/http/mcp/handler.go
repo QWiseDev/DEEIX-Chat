@@ -54,11 +54,12 @@ func (h *Handler) CreateServer(c *gin.Context) {
 		return
 	}
 	item, err := h.service.CreateServer(c.Request.Context(), appmcp.ServerInput{
-		Name:        req.Name,
-		BaseURL:     req.BaseURL,
-		AuthToken:   req.AuthToken,
-		HeadersJSON: req.HeadersJSON,
-		Status:      req.Status,
+		Name:            req.Name,
+		BaseURL:         req.BaseURL,
+		AuthToken:       req.AuthToken,
+		HeadersJSON:     req.HeadersJSON,
+		Status:          req.Status,
+		DefaultSelected: req.DefaultSelected,
 	})
 	if err != nil {
 		writeServiceError(c, err)
@@ -78,11 +79,12 @@ func (h *Handler) UpdateServer(c *gin.Context) {
 		return
 	}
 	item, err := h.service.UpdateServer(c.Request.Context(), serverID, appmcp.ServerInput{
-		Name:        req.Name,
-		BaseURL:     req.BaseURL,
-		AuthToken:   req.AuthToken,
-		HeadersJSON: req.HeadersJSON,
-		Status:      req.Status,
+		Name:            req.Name,
+		BaseURL:         req.BaseURL,
+		AuthToken:       req.AuthToken,
+		HeadersJSON:     req.HeadersJSON,
+		Status:          req.Status,
+		DefaultSelected: req.DefaultSelected,
 	})
 	if err != nil {
 		writeServiceError(c, err)
@@ -249,6 +251,7 @@ func toServerResponse(item domainmcp.Server) ServerResponse {
 		BaseURL:         item.BaseURL,
 		HeadersJSON:     security.RedactHeadersJSON(item.HeadersJSON),
 		Status:          item.Status,
+		DefaultSelected: item.DefaultSelected,
 		SortOrder:       item.SortOrder,
 		ToolCount:       item.ToolCount,
 		ActiveToolCount: item.ActiveToolCount,
@@ -261,16 +264,17 @@ func toServerResponse(item domainmcp.Server) ServerResponse {
 
 func toToolResponse(item domainmcp.Tool) ToolResponse {
 	return ToolResponse{
-		ID:              item.ID,
-		ServerID:        item.ServerID,
-		ServerName:      item.ServerName,
-		Name:            item.Name,
-		DisplayName:     item.DisplayName,
-		Description:     item.Description,
-		InputSchemaJSON: item.InputSchemaJSON,
-		Status:          item.Status,
-		SortOrder:       item.SortOrder,
-		CreatedAt:       item.CreatedAt,
-		UpdatedAt:       item.UpdatedAt,
+		ID:                    item.ID,
+		ServerID:              item.ServerID,
+		ServerName:            item.ServerName,
+		Name:                  item.Name,
+		DisplayName:           item.DisplayName,
+		Description:           item.Description,
+		InputSchemaJSON:       item.InputSchemaJSON,
+		Status:                item.Status,
+		ServerDefaultSelected: item.ServerDefaultSelected,
+		SortOrder:             item.SortOrder,
+		CreatedAt:             item.CreatedAt,
+		UpdatedAt:             item.UpdatedAt,
 	}
 }

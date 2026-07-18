@@ -79,6 +79,7 @@ type ServerFormState = {
   authToken: string;
   headersJSON: string;
   status: "active" | "inactive";
+  defaultSelected: boolean;
 };
 
 type ToolBulkAction = "active" | "inactive";
@@ -95,6 +96,7 @@ const EMPTY_SERVER_FORM: ServerFormState = {
   authToken: "",
   headersJSON: "{}",
   status: "active",
+  defaultSelected: false,
 };
 
 const DEFAULT_SERVER_PAGE_SIZE = 25;
@@ -120,6 +122,7 @@ function toServerForm(server: AdminMCPServerDTO): ServerFormState {
     authToken: "",
     headersJSON: server.headersJSON || "{}",
     status: server.status === "active" ? "active" : "inactive",
+    defaultSelected: server.defaultSelected === true,
   };
 }
 
@@ -130,6 +133,7 @@ function toServerPayload(form: ServerFormState): AdminMCPServerPayload {
     authToken: form.authToken.trim() || undefined,
     headersJSON: form.headersJSON.trim() || "{}",
     status: form.status,
+    defaultSelected: form.defaultSelected,
   };
 }
 
@@ -538,6 +542,7 @@ export function AdminToolsPage() {
         baseURL: server.baseURL,
         headersJSON: server.headersJSON || "{}",
         status: nextStatus,
+        defaultSelected: server.defaultSelected === true,
       });
       toast.success(t("toast.serverStatusUpdated", { status: serverStatusLabel(nextStatus, t) }));
     } catch (error) {
@@ -1158,6 +1163,19 @@ export function AdminToolsPage() {
                   placeholder="https://example.com/mcp"
                   onChange={(event) => setServerForm((prev) => ({ ...prev, baseURL: event.target.value }))}
                   required
+                />
+              </div>
+
+              <div className="flex items-center justify-between gap-3 rounded-md border px-3 py-2">
+                <div className="min-w-0">
+                  <p className="text-xs font-medium">{t("serverDialog.defaultSelected")}</p>
+                  <p className="text-xs leading-5 text-muted-foreground">{t("serverDialog.defaultSelectedDescription")}</p>
+                </div>
+                <Switch
+                  size="sm"
+                  checked={serverForm.defaultSelected}
+                  onCheckedChange={(defaultSelected) => setServerForm((prev) => ({ ...prev, defaultSelected }))}
+                  aria-label={t("serverDialog.defaultSelected")}
                 />
               </div>
 

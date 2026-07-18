@@ -8,6 +8,7 @@ type ServerResponse struct {
 	BaseURL         string     `json:"baseURL"`
 	HeadersJSON     string     `json:"headersJSON"`
 	Status          string     `json:"status"`
+	DefaultSelected bool       `json:"defaultSelected"`
 	SortOrder       int        `json:"sortOrder"`
 	ToolCount       int        `json:"toolCount"`
 	ActiveToolCount int        `json:"activeToolCount"`
@@ -18,25 +19,27 @@ type ServerResponse struct {
 }
 
 type ToolResponse struct {
-	ID              uint      `json:"id"`
-	ServerID        uint      `json:"serverID"`
-	ServerName      string    `json:"serverName"`
-	Name            string    `json:"name"`
-	DisplayName     string    `json:"displayName"`
-	Description     string    `json:"description"`
-	InputSchemaJSON string    `json:"inputSchemaJSON"`
-	Status          string    `json:"status"`
-	SortOrder       int       `json:"sortOrder"`
-	CreatedAt       time.Time `json:"createdAt"`
-	UpdatedAt       time.Time `json:"updatedAt"`
+	ID                    uint      `json:"id"`
+	ServerID              uint      `json:"serverID"`
+	ServerName            string    `json:"serverName"`
+	Name                  string    `json:"name"`
+	DisplayName           string    `json:"displayName"`
+	Description           string    `json:"description"`
+	InputSchemaJSON       string    `json:"inputSchemaJSON"`
+	Status                string    `json:"status"`
+	ServerDefaultSelected bool      `json:"serverDefaultSelected"`
+	SortOrder             int       `json:"sortOrder"`
+	CreatedAt             time.Time `json:"createdAt"`
+	UpdatedAt             time.Time `json:"updatedAt"`
 }
 
 type CreateServerRequest struct {
-	Name        string `json:"name"`
-	BaseURL     string `json:"baseURL"`
-	AuthToken   string `json:"authToken"`
-	HeadersJSON string `json:"headersJSON"`
-	Status      string `json:"status"`
+	Name            string `json:"name"`
+	BaseURL         string `json:"baseURL"`
+	AuthToken       string `json:"authToken"`
+	HeadersJSON     string `json:"headersJSON"`
+	Status          string `json:"status"`
+	DefaultSelected bool   `json:"defaultSelected"`
 }
 
 type UpdateToolRequest struct {

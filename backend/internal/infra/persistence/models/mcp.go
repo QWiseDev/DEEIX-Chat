@@ -5,15 +5,16 @@ import "time"
 // MCPServer 存储管理员配置的 MCP 服务。
 type MCPServer struct {
 	ControlPlaneModel
-	Name         string     `gorm:"size:128;not null;default:'';comment:MCP服务名称"`
-	BaseURL      string     `gorm:"size:512;not null;default:'';comment:MCP服务地址"`
-	AuthTokenEnc string     `gorm:"type:text;not null;default:'';comment:加密后的鉴权Token"`
-	HeadersJSON  string     `gorm:"type:text;not null;default:'{}';comment:附加请求头JSON"`
-	Status       string     `gorm:"size:32;not null;default:'active';index:idx_mcp_servers_status;comment:服务状态(active/inactive)"`
-	SortOrder    int        `gorm:"not null;default:0;index:idx_mcp_servers_sort_order;comment:展示顺序"`
-	ToolCount    int        `gorm:"not null;default:0;comment:最近发现工具数量"`
-	LastSyncedAt *time.Time `gorm:"comment:最近同步工具时间"`
-	LastError    string     `gorm:"type:text;not null;default:'';comment:最近同步或调用错误"`
+	Name            string     `gorm:"size:128;not null;default:'';comment:MCP服务名称"`
+	BaseURL         string     `gorm:"size:512;not null;default:'';comment:MCP服务地址"`
+	AuthTokenEnc    string     `gorm:"type:text;not null;default:'';comment:加密后的鉴权Token"`
+	HeadersJSON     string     `gorm:"type:text;not null;default:'{}';comment:附加请求头JSON"`
+	Status          string     `gorm:"size:32;not null;default:'active';index:idx_mcp_servers_status;comment:服务状态(active/inactive)"`
+	DefaultSelected bool       `gorm:"not null;default:false;index:idx_mcp_servers_default_selected;comment:聊天默认选中该服务下工具"`
+	SortOrder       int        `gorm:"not null;default:0;index:idx_mcp_servers_sort_order;comment:展示顺序"`
+	ToolCount       int        `gorm:"not null;default:0;comment:最近发现工具数量"`
+	LastSyncedAt    *time.Time `gorm:"comment:最近同步工具时间"`
+	LastError       string     `gorm:"type:text;not null;default:'';comment:最近同步或调用错误"`
 }
 
 func (MCPServer) TableName() string {

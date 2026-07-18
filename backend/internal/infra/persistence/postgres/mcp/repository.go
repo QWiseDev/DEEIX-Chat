@@ -29,12 +29,13 @@ func (r *Repo) CreateServer(ctx context.Context, input repository.CreateMCPServe
 			return err
 		}
 		item := model.MCPServer{
-			Name:         input.Name,
-			BaseURL:      input.BaseURL,
-			AuthTokenEnc: input.AuthTokenEnc,
-			HeadersJSON:  input.HeadersJSON,
-			Status:       input.Status,
-			SortOrder:    maxSortOrder + 100,
+			Name:            input.Name,
+			BaseURL:         input.BaseURL,
+			AuthTokenEnc:    input.AuthTokenEnc,
+			HeadersJSON:     input.HeadersJSON,
+			Status:          input.Status,
+			DefaultSelected: input.DefaultSelected,
+			SortOrder:       maxSortOrder + 100,
 		}
 		if err := tx.Create(&item).Error; err != nil {
 			return err
@@ -63,6 +64,9 @@ func (r *Repo) UpdateServer(ctx context.Context, serverID uint, input repository
 	}
 	if input.Status != nil {
 		updates["status"] = *input.Status
+	}
+	if input.DefaultSelected != nil {
+		updates["default_selected"] = *input.DefaultSelected
 	}
 	if input.LastError != nil {
 		updates["last_error"] = *input.LastError
@@ -385,6 +389,7 @@ func toDomainServer(row model.MCPServer) domainmcp.Server {
 		AuthTokenEnc:    row.AuthTokenEnc,
 		HeadersJSON:     row.HeadersJSON,
 		Status:          row.Status,
+		DefaultSelected: row.DefaultSelected,
 		SortOrder:       row.SortOrder,
 		ToolCount:       row.ToolCount,
 		ActiveToolCount: 0,
