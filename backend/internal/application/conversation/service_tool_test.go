@@ -44,6 +44,32 @@ func TestExecuteAssistantToolCallsStopsWhenToolNotEnabledForRun(t *testing.T) {
 	}
 }
 
+func TestExecuteAssistantToolCallsIgnoresUnnamedToolCalls(t *testing.T) {
+	svc := &Service{}
+	result := svc.executeAssistantToolCalls(context.Background(), executeAssistantToolCallsInput{
+		RunID: "run_1",
+		ToolCalls: []llm.ToolCall{{
+			ToolType: "function",
+		}, {
+			ToolCallID:    "toolu_1",
+			ToolType:      "function",
+			ToolName:      "web_search",
+			ArgumentsJSON: `{"query":"weather"}`,
+			Status:        "requested",
+		}},
+	})
+
+	if result.FatalErr == nil || !strings.Contains(result.FatalErr.Error(), "web_search") {
+		t.Fatalf("expected only the named disabled tool to fail, got %v", result.FatalErr)
+	}
+	if len(result.Rows) != 1 || result.Rows[0].ToolName != "web_search" {
+		t.Fatalf("expected unnamed tool call to be ignored, got %#v", result.Rows)
+	}
+	if len(result.ExecutedToolCalls) != 1 || result.ExecutedToolCalls[0].ToolName != "web_search" {
+		t.Fatalf("expected only named tool call to be sent back to model, got %#v", result.ExecutedToolCalls)
+	}
+}
+
 func TestResolveMaxLLMCallsPerRunRequiresFollowUpRound(t *testing.T) {
 	svc := &Service{cfg: config.NewRuntime(config.Config{MCPMaxLLMCallsPerRun: 1})}
 	if got := svc.resolveMaxLLMCallsPerRun(); got != 2 {

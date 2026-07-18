@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -45,6 +46,53 @@ func (h *Handler) ListAvailableTools(c *gin.Context) {
 		results = append(results, toToolResponse(item))
 	}
 	response.Success(c, ToolListResponse{Results: results})
+}
+
+// PreviewRAGFlowDocument godoc
+// @Summary 预览 RAGFlow 知识库原文件
+// @Description 通过服务端保存的 RAGFlow API Key 代理原文件，避免密钥暴露给浏览器
+// @Tags mcp
+// @Produce application/octet-stream
+// @Security BearerAuth
+// @Param document_id path string true "RAGFlow 文档 ID"
+// @Success 200 {file} binary
+// @Failure 400 {object} ErrorDoc
+// @Failure 404 {object} ErrorDoc
+// @Failure 502 {object} ErrorDoc
+// @Router /mcp/ragflow/documents/{document_id}/preview [get]
+func (h *Handler) PreviewRAGFlowDocument(c *gin.Context) {
+	result, err := h.service.OpenRAGFlowDocumentPreview(c.Request.Context(), c.Param("document_id"))
+	if err != nil {
+		switch {
+		case errors.Is(err, appmcp.ErrInvalidDocumentID):
+			response.ErrorFrom(c, http.StatusBadRequest, err)
+		case errors.Is(err, appmcp.ErrRAGFlowUnavailable), errors.Is(err, appmcp.ErrRAGFlowDocumentGone):
+			response.ErrorFrom(c, http.StatusNotFound, err)
+		case errors.Is(err, appmcp.ErrRAGFlowTokenRequired):
+			response.ErrorFrom(c, http.StatusServiceUnavailable, err)
+		default:
+			response.ErrorFrom(c, http.StatusBadGateway, err)
+		}
+		return
+	}
+	defer result.Reader.Close() //nolint:errcheck
+
+	contentType := result.ContentType
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	c.Header("Content-Type", contentType)
+	if result.ContentDisposition != "" {
+		c.Header("Content-Disposition", result.ContentDisposition)
+	}
+	c.Header("Cache-Control", "private, max-age=60")
+	c.Header("X-Content-Type-Options", "nosniff")
+	if result.ContentLength > 0 {
+		c.Header("Content-Length", strconv.FormatInt(result.ContentLength, 10))
+	}
+	if _, err = io.Copy(c.Writer, result.Reader); err != nil {
+		c.Abort()
+	}
 }
 
 func (h *Handler) CreateServer(c *gin.Context) {

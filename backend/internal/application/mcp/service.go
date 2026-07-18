@@ -5,8 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
+	"time"
 
 	systemeventapp "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/systemevent"
 	domainmcp "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/mcp"
@@ -27,15 +32,37 @@ var (
 	ErrInvalidToolDesc      = errors.New("invalid mcp tool description")
 	ErrInvalidToolSelection = errors.New("invalid mcp tool selection")
 	ErrMCPClientUnavailable = errors.New("mcp client unavailable")
+	ErrRAGFlowUnavailable   = errors.New("ragflow mcp server unavailable")
+	ErrRAGFlowTokenRequired = errors.New("ragflow api token required")
+	ErrInvalidDocumentID    = errors.New("invalid ragflow document id")
+	ErrRAGFlowDocumentGone  = errors.New("ragflow document not found")
+	ErrRAGFlowPreviewFailed = errors.New("ragflow document preview failed")
 )
 
-const mcpServerToolListTimeoutMS = 10000
+const (
+	mcpServerToolListTimeoutMS = 10000
+	ragflowMCPDefaultPort      = "9382"
+	ragflowAPIDefaultPort      = "9380"
+	ragflowPreviewTimeout      = 60 * time.Second
+	ragflowPreviewErrorLimit   = 4 * 1024
+)
+
+var ragflowDocumentIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
 type Service struct {
 	cfg               *config.Runtime
 	repo              repository.MCPRepository
 	client            *inframcp.Client
+	previewHTTPClient *http.Client
 	systemEventWriter systemEventWriter
+}
+
+// RAGFlowPreviewContent 描述从 RAGFlow 读取到的原文件流。
+type RAGFlowPreviewContent struct {
+	Reader             io.ReadCloser
+	ContentType        string
+	ContentDisposition string
+	ContentLength      int64
 }
 
 type ReorderServerInput struct {
@@ -70,7 +97,13 @@ type SyncServerToolsInput struct {
 
 // NewServiceWithRuntime 创建 MCP 应用服务。
 func NewServiceWithRuntime(cfg *config.Runtime, repo repository.MCPRepository, client *inframcp.Client) *Service {
-	return &Service{cfg: cfg, repo: repo, client: client}
+	snapshot := cfg.Snapshot()
+	return &Service{
+		cfg:               cfg,
+		repo:              repo,
+		client:            client,
+		previewHTTPClient: security.NewOutboundHTTPClient(snapshot.Env, snapshot.SSRFProtectionEnabled, ragflowPreviewTimeout),
+	}
 }
 
 // SetSystemEventWriter 注入系统事件写入器。
@@ -84,6 +117,85 @@ func (s *Service) ListServers(ctx context.Context) ([]domainmcp.Server, error) {
 
 func (s *Service) GetServer(ctx context.Context, serverID uint) (*domainmcp.Server, error) {
 	return s.repo.GetServer(ctx, serverID)
+}
+
+// OpenRAGFlowDocumentPreview 通过已配置的 RAGFlow MCP 服务安全读取原始文档。
+func (s *Service) OpenRAGFlowDocumentPreview(ctx context.Context, documentID string) (*RAGFlowPreviewContent, error) {
+	normalizedDocumentID := strings.TrimSpace(documentID)
+	if !ragflowDocumentIDPattern.MatchString(normalizedDocumentID) {
+		return nil, ErrInvalidDocumentID
+	}
+	servers, err := s.repo.ListServers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var server *domainmcp.Server
+	for index := range servers {
+		item := &servers[index]
+		if item.Status == "active" && strings.EqualFold(strings.TrimSpace(item.Name), "RAGFlow") {
+			server = item
+			break
+		}
+	}
+	if server == nil {
+		return nil, ErrRAGFlowUnavailable
+	}
+	if strings.TrimSpace(server.AuthTokenEnc) == "" {
+		return nil, ErrRAGFlowTokenRequired
+	}
+	token, err := s.decryptToken(server.AuthTokenEnc)
+	if err != nil || strings.TrimSpace(token) == "" {
+		return nil, ErrRAGFlowTokenRequired
+	}
+	previewURL, err := buildRAGFlowPreviewURL(server.BaseURL, normalizedDocumentID)
+	if err != nil {
+		return nil, err
+	}
+	snapshot := s.cfg.Snapshot()
+	if err = security.ValidateOutboundHTTPURL(previewURL, snapshot.Env, snapshot.SSRFProtectionEnabled); err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, previewURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
+	resp, err := s.previewHTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrRAGFlowPreviewFailed, err)
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		defer resp.Body.Close() //nolint:errcheck
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, ragflowPreviewErrorLimit))
+		if resp.StatusCode == http.StatusNotFound {
+			return nil, ErrRAGFlowDocumentGone
+		}
+		return nil, fmt.Errorf("%w: status=%d body=%s", ErrRAGFlowPreviewFailed, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return &RAGFlowPreviewContent{
+		Reader:             resp.Body,
+		ContentType:        strings.TrimSpace(resp.Header.Get("Content-Type")),
+		ContentDisposition: strings.TrimSpace(resp.Header.Get("Content-Disposition")),
+		ContentLength:      resp.ContentLength,
+	}, nil
+}
+
+func buildRAGFlowPreviewURL(baseURL string, documentID string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil || parsed == nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", ErrInvalidServerBaseURL
+	}
+	if parsed.User != nil {
+		return "", ErrInvalidServerBaseURL
+	}
+	if parsed.Port() == ragflowMCPDefaultPort {
+		parsed.Host = net.JoinHostPort(parsed.Hostname(), ragflowAPIDefaultPort)
+	}
+	parsed.Path = "/api/v1/documents/" + url.PathEscape(documentID) + "/preview"
+	parsed.RawPath = ""
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String(), nil
 }
 
 func (s *Service) CreateServer(ctx context.Context, input ServerInput) (*domainmcp.Server, error) {

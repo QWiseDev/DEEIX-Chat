@@ -76,6 +76,15 @@ export type ProcessTraceLabels = {
       command: string;
       latencySeparator: string;
     };
+    ragflow: {
+      sources: (count: number) => string;
+      similarity: (scorePercent: number) => string;
+      unknownFile: string;
+      viewChunk: string;
+      previewFile: string;
+      chunkTitle: string;
+      sessionExpired: string;
+    };
     nativeStatus: {
       webSearchActive: string;
       webSearchDone: string;
@@ -227,6 +236,15 @@ export function useProcessTraceLabels(): ProcessTraceLabels {
           prompt: t("tool.detail.prompt"),
           command: t("tool.detail.command"),
           latencySeparator: t("tool.detail.latencySeparator"),
+        },
+        ragflow: {
+          sources: (count: number) => t("tool.ragflow.sources", { count }),
+          similarity: (scorePercent: number) => t("tool.ragflow.similarity", { scorePercent }),
+          unknownFile: t("tool.ragflow.unknownFile"),
+          viewChunk: t("tool.ragflow.viewChunk"),
+          previewFile: t("tool.ragflow.previewFile"),
+          chunkTitle: t("tool.ragflow.chunkTitle"),
+          sessionExpired: t("tool.ragflow.sessionExpired"),
         },
         nativeStatus: {
           webSearchActive: t("tool.nativeStatus.webSearchActive"),

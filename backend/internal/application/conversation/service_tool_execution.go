@@ -58,7 +58,7 @@ func newToolExecutionLedger() *toolExecutionLedger {
 }
 
 func (s *Service) executeAssistantToolCalls(ctx context.Context, input executeAssistantToolCallsInput) executeAssistantToolCallsResult {
-	toolCalls := input.ToolCalls
+	toolCalls := filterNamedToolCalls(input.ToolCalls)
 	if input.ToolCallLimit > 0 && len(toolCalls) > input.ToolCallLimit {
 		toolCalls = toolCalls[:input.ToolCallLimit]
 	}
@@ -192,6 +192,17 @@ func (s *Service) executeAssistantToolCalls(ctx context.Context, input executeAs
 		PersistedToolCallKeys: persistedToolCallKeys,
 		FatalErr:              fatalErr,
 	}
+}
+
+func filterNamedToolCalls(toolCalls []llm.ToolCall) []llm.ToolCall {
+	filtered := make([]llm.ToolCall, 0, len(toolCalls))
+	for _, call := range toolCalls {
+		if strings.TrimSpace(call.ToolName) == "" {
+			continue
+		}
+		filtered = append(filtered, call)
+	}
+	return filtered
 }
 
 func toolExecutionHasError(rows []model.ToolCall) bool {

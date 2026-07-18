@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { Eye, FileText } from "lucide-react";
 
 import { ChevronDown } from "@/components/animate-ui/icons/chevron-down";
 import {
@@ -10,11 +11,17 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import { Marker, MarkerContent } from "@/components/ui/marker";
-import type { ChatTraceBlock } from "@/features/chat/types/messages";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import type { ChatTraceBlock, ChatTraceEvent } from "@/features/chat/types/messages";
 import {
   useProcessTraceLabels,
   type ProcessTraceLabels,
 } from "@/features/chat/hooks/use-process-trace-labels";
+import { FilePreviewDialog, type PreviewDialogFile } from "@/shared/components/file-preview/preview-dialog";
+import { fetchRAGFlowDocumentPreview } from "@/shared/api/mcp";
+import { resolveAccessToken } from "@/shared/auth/resolve-access-token";
 import { cn } from "@/lib/utils";
 import { TRACE_ROOT_CLASS } from "@/features/chat/components/shared/message-process-trace-shared";
 import type { TraceDisplayEvent } from "@/features/chat/model/message-process-trace";
@@ -35,6 +42,7 @@ type ToolTraceCall = {
   output_text?: string;
   output_preview?: string;
   output_detail?: string;
+  ragflow_chunks?: unknown[];
 };
 
 type NativeToolKind = "web_search" | "code_interpreter" | "image_generation" | "shell" | "generic";
@@ -442,6 +450,210 @@ function toolOutputPayload(call: ToolTraceCall): unknown {
   return parseToolPayload(call.output_detail) ?? parseToolPayload(call.output) ?? parseToolPayload(call.output_text) ?? parseToolPayload(call.output_preview);
 }
 
+type RAGFlowChunk = {
+  id: string;
+  documentID: string;
+  documentName: string;
+  datasetName: string;
+  content: string;
+  similarity: number | null;
+};
+
+function unwrapMCPTextPayload(value: unknown): unknown {
+  if (!isRecord(value) || !Array.isArray(value.content)) return value;
+  for (const item of value.content) {
+    if (!isRecord(item)) continue;
+    const text = readString(item.text);
+    if (!text) continue;
+    const parsed = parseToolPayload(text);
+    if (parsed !== null) return parsed;
+  }
+  return value;
+}
+
+function parseRAGFlowChunks(call: ToolTraceCall): RAGFlowChunk[] {
+  if (normalizeToolName(call.name) !== "ragflow_retrieval") return [];
+  let rawChunks = Array.isArray(call.ragflow_chunks) ? call.ragflow_chunks : [];
+  if (rawChunks.length === 0) {
+    const payload = unwrapMCPTextPayload(toolOutputPayload(call));
+    rawChunks = Array.isArray(payload)
+      ? payload
+      : isRecord(payload) && Array.isArray(payload.chunks)
+        ? payload.chunks
+        : isRecord(payload) && Array.isArray(payload.data)
+          ? payload.data
+          : [];
+  }
+
+  return rawChunks.flatMap<RAGFlowChunk>((item, index) => {
+    if (!isRecord(item)) return [];
+    const content = firstStringFromRecord(item, ["content", "content_with_weight"]);
+    if (!content) return [];
+    return [{
+      id: firstStringFromRecord(item, ["id", "chunk_id"]) || `chunk-${index}`,
+      documentID: firstStringFromRecord(item, ["document_id", "doc_id"]),
+      documentName: firstStringFromRecord(item, ["document_name", "document_keyword", "doc_name"]),
+      datasetName: firstStringFromRecord(item, ["dataset_name", "knowledgebase_name"]),
+      content,
+      similarity: readNumber(item.similarity),
+    }];
+  });
+}
+
+type RAGFlowDocumentReference = {
+  key: string;
+  documentID: string;
+  documentName: string;
+  datasetName: string;
+  chunks: RAGFlowChunk[];
+};
+
+function collectRAGFlowChunks(events: ChatTraceEvent[], activeToolBlock?: ChatTraceBlock): RAGFlowChunk[] {
+  const calls = [
+    ...events.flatMap((event) => parseToolTraceCalls(event.payloadJson)),
+    ...parseToolTraceCalls(activeToolBlock?.payloadJson),
+  ];
+  const seen = new Set<string>();
+  return calls.flatMap(parseRAGFlowChunks).filter((chunk) => {
+    const key = chunk.id || `${chunk.documentID}:${chunk.content}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function groupRAGFlowDocuments(chunks: RAGFlowChunk[], unknownFile: string): RAGFlowDocumentReference[] {
+  const documents = new Map<string, RAGFlowDocumentReference>();
+  for (const chunk of chunks) {
+    const documentName = chunk.documentName || unknownFile;
+    const key = chunk.documentID || documentName;
+    const document = documents.get(key);
+    if (document) {
+      document.chunks.push(chunk);
+      continue;
+    }
+    documents.set(key, {
+      key,
+      documentID: chunk.documentID,
+      documentName,
+      datasetName: chunk.datasetName,
+      chunks: [chunk],
+    });
+  }
+  return Array.from(documents.values());
+}
+
+export function MessageRAGFlowReferences({
+  events,
+  activeToolBlock,
+}: {
+  events: ChatTraceEvent[];
+  activeToolBlock?: ChatTraceBlock;
+}) {
+  const labels = useProcessTraceLabels();
+  const chunks = React.useMemo(() => collectRAGFlowChunks(events, activeToolBlock), [activeToolBlock, events]);
+  const documents = React.useMemo(
+    () => groupRAGFlowDocuments(chunks, labels.tool.ragflow.unknownFile),
+    [chunks, labels.tool.ragflow.unknownFile],
+  );
+  const [selectedDocument, setSelectedDocument] = React.useState<RAGFlowDocumentReference | null>(null);
+  const [previewDocument, setPreviewDocument] = React.useState<RAGFlowDocumentReference | null>(null);
+  const previewFile = React.useMemo<PreviewDialogFile | null>(() => {
+    if (!previewDocument?.documentID) return null;
+    return {
+      fileID: previewDocument.documentID,
+      fileName: previewDocument.documentName,
+      mimeType: "application/octet-stream",
+      sizeBytes: 0,
+    };
+  }, [previewDocument]);
+  const loadPreview = React.useCallback(async (file: PreviewDialogFile) => {
+    const accessToken = await resolveAccessToken();
+    if (!accessToken) {
+      throw new Error(labels.tool.ragflow.sessionExpired);
+    }
+    return fetchRAGFlowDocumentPreview(accessToken, file.fileID);
+  }, [labels.tool.ragflow.sessionExpired]);
+
+  if (documents.length === 0) return null;
+
+  return (
+    <>
+      <section className="mt-4 flex flex-wrap gap-2" aria-label={labels.tool.ragflow.sources(chunks.length)}>
+        {documents.map((document) => (
+          <div
+            key={document.key}
+            className="inline-flex min-w-0 max-w-full items-stretch overflow-hidden rounded-lg border border-border/55 bg-card shadow-sm transition-colors hover:border-border"
+          >
+            <button
+              type="button"
+              className="flex min-w-0 items-center gap-2 px-3 py-2 text-left text-[13px] text-foreground/85 transition-colors hover:bg-muted/35"
+              disabled={!document.documentID}
+              onClick={() => setPreviewDocument(document)}
+            >
+              <FileText className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+              <span className="min-w-0 truncate">{document.documentName}</span>
+            </button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  size="icon-xs"
+                  variant="ghost"
+                  className="h-auto w-8 rounded-none border-l border-border/45 text-muted-foreground hover:text-foreground"
+                  aria-label={labels.tool.ragflow.sources(document.chunks.length)}
+                  onClick={() => setSelectedDocument(document)}
+                >
+                  <Eye className="size-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{labels.tool.ragflow.sources(document.chunks.length)}</TooltipContent>
+            </Tooltip>
+          </div>
+        ))}
+      </section>
+
+      <Dialog open={selectedDocument !== null} onOpenChange={(nextOpen) => !nextOpen && setSelectedDocument(null)}>
+        <DialogContent className="max-h-[82dvh] w-[calc(100vw-1.5rem)] overflow-hidden p-0 sm:max-w-2xl">
+          <DialogHeader className="border-b border-border/50 px-4 py-3 sm:px-5">
+            <DialogTitle className="break-all text-sm font-medium">
+              {selectedDocument?.documentName || labels.tool.ragflow.chunkTitle}
+            </DialogTitle>
+            <DialogDescription>
+              {[selectedDocument?.datasetName, selectedDocument ? labels.tool.ragflow.sources(selectedDocument.chunks.length) : ""]
+                .filter(Boolean)
+                .join(" · ")}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[calc(82dvh-72px)] overflow-auto px-4 py-2 sm:px-5">
+            <ol className="divide-y divide-border/45">
+              {selectedDocument?.chunks.map((chunk, index) => {
+                const scorePercent = chunk.similarity === null ? null : Math.round(chunk.similarity * 1000) / 10;
+                return (
+                  <li key={chunk.id} className="space-y-2 py-4">
+                    <div className="flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
+                      <span>{labels.tool.ragflow.chunkTitle} {index + 1}</span>
+                      {scorePercent !== null ? <span>{labels.tool.ragflow.similarity(scorePercent)}</span> : null}
+                    </div>
+                    <p className="whitespace-pre-wrap break-words text-sm leading-7 text-foreground/88">{chunk.content}</p>
+                  </li>
+                );
+              })}
+            </ol>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <FilePreviewDialog
+        file={previewFile}
+        open={previewDocument !== null}
+        onOpenChange={(nextOpen) => !nextOpen && setPreviewDocument(null)}
+        loadContent={loadPreview}
+      />
+    </>
+  );
+}
+
 function toolInputText(call: ToolTraceCall, keys: string[]): string {
   const input = toolInputPayload(call);
   if (isRecord(input)) {
@@ -499,6 +711,14 @@ function ToolTraceStructuredContent({
   const output = toolOutputPayload(call);
   const statusText = nativeToolStatusText(call, labels);
   const urlKeys = ["url", "uri", "image_url"];
+
+  if (normalizeToolName(call.name) === "ragflow_retrieval") {
+    return (
+      <div className={cn("space-y-2 text-muted-foreground/84", failed && "text-destructive/80")}>
+        <div>{statusText}</div>
+      </div>
+    );
+  }
 
   if (kind === "web_search") {
     const query = firstStringFromRecord(input, ["query", "q"]) || firstStringListFromRecord(input, ["queries"]).join(", ") || geminiWebSearchQuery(output) || toolOutputText(call, ["query"]);

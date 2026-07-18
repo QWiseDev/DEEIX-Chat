@@ -5,6 +5,7 @@ import "github.com/gin-gonic/gin"
 func (m *Module) RegisterRoutes(authGroup *gin.RouterGroup) {
 	group := authGroup.Group("/mcp")
 	group.GET("/tools", m.Handler.ListAvailableTools)
+	group.GET("/ragflow/documents/:document_id/preview", m.Handler.PreviewRAGFlowDocument)
 }
 
 func (m *Module) RegisterAdminRoutes(adminGroup *gin.RouterGroup) {

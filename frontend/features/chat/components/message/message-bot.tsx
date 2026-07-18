@@ -7,6 +7,7 @@ import { useTranslations } from "next-intl";
 import { AssistantMessageMeta } from "@/features/chat/components/message/message-meta";
 import { MessageAttachmentRow } from "@/features/chat/components/message/message-attachment";
 import { MessageProcessTrace, MessageTraceEventBlocks } from "@/features/chat/components/message/message-process-trace";
+import { MessageRAGFlowReferences } from "@/features/chat/components/message/message-tool-trace";
 import { GrainientBackground } from "@/components/reactbits/backgrounds/grainient";
 import type { AssistantReaction } from "@/features/chat/components/message/message-meta";
 import type {
@@ -379,6 +380,8 @@ export function ChatMessageBot({
           <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{item.content}</p>
         ) : null}
       </div>
+
+      <MessageRAGFlowReferences events={postProcessEvents} activeToolBlock={toolTrace} />
 
       {inlineVideoAttachment ? (
         <MessageInlineVideoPreview attachment={inlineVideoAttachment} loadContent={attachmentContentLoader} />

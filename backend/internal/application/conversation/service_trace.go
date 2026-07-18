@@ -46,6 +46,8 @@ const (
 const (
 	toolTracePreviewMaxChars = 260
 	toolTraceDetailMaxChars  = 4096
+	ragflowTraceMaxChunks    = 20
+	ragflowTraceMaxChars     = 64 * 1024
 )
 
 const (
@@ -1608,7 +1610,7 @@ func buildToolTrace(rows []model.ToolCall) (string, string, map[string]interface
 			parts = append(parts, "结果："+outputPreview)
 		}
 		lines = append(lines, formatTraceStep(toolName, joinTraceParts(parts...)))
-		toolCalls = append(toolCalls, map[string]interface{}{
+		toolCall := map[string]interface{}{
 			"tool_call_id":     strings.TrimSpace(row.ToolCallID),
 			"name":             toolName,
 			"type":             strings.TrimSpace(row.ToolType),
@@ -1623,7 +1625,11 @@ func buildToolTrace(rows []model.ToolCall) (string, string, map[string]interface
 			"output_detail":    outputDetail,
 			"output_size":      len(output),
 			"output_truncated": outputTruncated,
-		})
+		}
+		if chunks := ragflowTraceChunks(toolName, output); len(chunks) > 0 {
+			toolCall["ragflow_chunks"] = chunks
+		}
+		toolCalls = append(toolCalls, toolCall)
 	}
 	summary := fmt.Sprintf("%d 次工具调用已完成", len(rows))
 	if requestedCount > 0 && successCount == 0 && errorCount == 0 {
@@ -1636,6 +1642,68 @@ func buildToolTrace(rows []model.ToolCall) (string, string, map[string]interface
 	return summary, strings.Join(lines, "\n"), map[string]interface{}{
 		"tool_calls": toolCalls,
 	}
+}
+
+func ragflowTraceChunks(toolName string, raw string) []map[string]interface{} {
+	if strings.TrimSpace(toolName) != "ragflow_retrieval" {
+		return nil
+	}
+	var result struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &result); err != nil {
+		return nil
+	}
+	remainingChars := ragflowTraceMaxChars
+	chunks := make([]map[string]interface{}, 0, ragflowTraceMaxChunks)
+	for _, content := range result.Content {
+		var payload struct {
+			Chunks []map[string]interface{} `json:"chunks"`
+		}
+		if err := json.Unmarshal([]byte(strings.TrimSpace(content.Text)), &payload); err != nil {
+			continue
+		}
+		for _, item := range payload.Chunks {
+			if len(chunks) >= ragflowTraceMaxChunks || remainingChars <= 0 {
+				return chunks
+			}
+			text := firstRAGFlowTraceString(item, "content", "content_with_weight")
+			if text == "" {
+				continue
+			}
+			textRunes := []rune(text)
+			truncated := len(textRunes) > remainingChars
+			if truncated {
+				text = string(textRunes[:remainingChars]) + "..."
+				textRunes = textRunes[:remainingChars]
+			}
+			chunk := map[string]interface{}{
+				"id":                firstRAGFlowTraceString(item, "id", "chunk_id"),
+				"document_id":       firstRAGFlowTraceString(item, "document_id", "doc_id"),
+				"document_name":     firstRAGFlowTraceString(item, "document_name", "document_keyword", "doc_name"),
+				"dataset_name":      firstRAGFlowTraceString(item, "dataset_name", "knowledgebase_name"),
+				"content":           text,
+				"content_truncated": truncated,
+			}
+			if similarity, ok := item["similarity"].(float64); ok {
+				chunk["similarity"] = similarity
+			}
+			chunks = append(chunks, chunk)
+			remainingChars -= len(textRunes)
+		}
+	}
+	return chunks
+}
+
+func firstRAGFlowTraceString(item map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := item[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func toolOutputPreview(raw string) string {

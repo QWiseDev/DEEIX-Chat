@@ -92,6 +92,54 @@ func TestBuildToolTraceStoresPreviewMetadataInsteadOfFullOutput(t *testing.T) {
 	}
 }
 
+func TestBuildToolTraceStoresStructuredRAGFlowChunksWhenOutputIsTruncated(t *testing.T) {
+	content := strings.Repeat("检索片段", 1200)
+	inner, err := json.Marshal(map[string]interface{}{
+		"chunks": []map[string]interface{}{{
+			"id":            "chunk-1",
+			"document_id":   "doc-1",
+			"document_name": "知识库/部署手册.docx",
+			"dataset_name":  "运维知识库",
+			"content":       content,
+			"similarity":    0.82,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal inner payload: %v", err)
+	}
+	outer, err := json.Marshal(map[string]interface{}{
+		"content": []map[string]interface{}{{"type": "text", "text": string(inner)}},
+	})
+	if err != nil {
+		t.Fatalf("marshal outer payload: %v", err)
+	}
+
+	_, _, payload := buildToolTrace([]model.ToolCall{{
+		ToolName:   "ragflow_retrieval",
+		Status:     "success",
+		OutputJSON: string(outer),
+	}})
+	items := normalizeTraceToolCalls(payload["tool_calls"])
+	if len(items) != 1 {
+		t.Fatalf("expected one tool call, got %#v", items)
+	}
+	item := items[0]
+	if item["output_truncated"] != true {
+		t.Fatalf("expected generic output detail to stay truncated, got %#v", item["output_truncated"])
+	}
+	chunks, ok := item["ragflow_chunks"].([]map[string]interface{})
+	if !ok || len(chunks) != 1 {
+		t.Fatalf("expected one structured ragflow chunk, got %#v", item["ragflow_chunks"])
+	}
+	chunk := chunks[0]
+	if chunk["document_id"] != "doc-1" || chunk["document_name"] != "知识库/部署手册.docx" {
+		t.Fatalf("unexpected document metadata: %#v", chunk)
+	}
+	if chunk["content"] != content || chunk["content_truncated"] != false {
+		t.Fatalf("expected full structured chunk content, got len=%d truncated=%v", len([]rune(getTraceString(chunk["content"]))), chunk["content_truncated"])
+	}
+}
+
 func TestToolTracePayloadMergesStreamingPlaceholderWithFinalCall(t *testing.T) {
 	_, _, streamingPayload := buildToolTrace([]model.ToolCall{{
 		ToolType:  "web_search_call",

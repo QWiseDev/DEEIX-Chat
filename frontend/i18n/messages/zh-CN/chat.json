@@ -568,6 +568,15 @@
         "command": "命令",
         "latencySeparator": "；"
       },
+      "ragflow": {
+        "sources": "命中 {count} 个知识片段",
+        "similarity": "相似度 {scorePercent}%",
+        "unknownFile": "未知文件",
+        "viewChunk": "查看片段",
+        "previewFile": "预览文件",
+        "chunkTitle": "匹配片段",
+        "sessionExpired": "登录状态已失效，请重新登录"
+      },
       "nativeStatus": {
         "webSearchActive": "正在网页搜索",
         "webSearchDone": "网页搜索完成",

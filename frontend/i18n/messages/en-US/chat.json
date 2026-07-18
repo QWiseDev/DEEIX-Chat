@@ -568,6 +568,15 @@
         "command": "Command",
         "latencySeparator": "; "
       },
+      "ragflow": {
+        "sources": "{count} knowledge chunks matched",
+        "similarity": "Similarity {scorePercent}%",
+        "unknownFile": "Unknown file",
+        "viewChunk": "View chunk",
+        "previewFile": "Preview file",
+        "chunkTitle": "Matched chunk",
+        "sessionExpired": "Your session has expired. Please sign in again."
+      },
       "nativeStatus": {
         "webSearchActive": "Searching the web",
         "webSearchDone": "Web search complete",
