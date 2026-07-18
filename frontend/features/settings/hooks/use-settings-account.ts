@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 
 import { resolveApiBaseURL } from "@/shared/api/http-client";
+import { createProviderPKCE, providerPKCEStorageKey } from "@/shared/auth/pkce";
 import { resolveAccessToken } from "@/shared/auth/resolve-access-token";
 import {
   cancelCurrentTwoFactorSetup,
@@ -93,29 +94,6 @@ type UseSettingsAccountResult = {
 };
 
 const VERIFICATION_CODE_RESEND_COOLDOWN_MS = 60_000;
-
-function providerPKCEStorageKey(slug: string): string {
-  return `deeix-chat:oauth:${slug}:pkce_verifier`;
-}
-
-function base64URL(bytes: Uint8Array): string {
-  let binary = "";
-  bytes.forEach((byte) => {
-    binary += String.fromCharCode(byte);
-  });
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
-}
-
-async function createProviderPKCE() {
-  const verifierBytes = new Uint8Array(48);
-  window.crypto.getRandomValues(verifierBytes);
-  const verifier = base64URL(verifierBytes);
-  const digest = await window.crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
-  return {
-    verifier,
-    challenge: base64URL(new Uint8Array(digest)),
-  };
-}
 
 export function useSettingsAccount(): UseSettingsAccountResult {
   const t = useTranslations("settings.accountPage.toasts");

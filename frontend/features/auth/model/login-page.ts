@@ -2,6 +2,8 @@ import type { LoginOptionsData, LoginPageSettings } from "@/shared/api/auth.type
 import { ApiError } from "@/shared/api/http-client";
 import { DEFAULT_AUTH_NEXT_PATH } from "@/shared/auth/local-path";
 
+export { createProviderPKCE, providerPKCEStorageKey } from "@/shared/auth/pkce";
+
 export type LoginMode = "login" | "register" | "reset-password";
 export type ProviderAuthIntent = "login" | "register";
 
@@ -31,29 +33,6 @@ export function normalizeRegisterCode(value: string): string {
   return value.replace(/\D/g, "").slice(0, 6);
 }
 
-export function providerPKCEStorageKey(slug: string): string {
-  return `deeix-chat:oauth:${slug}:pkce_verifier`;
-}
-
 export function isTwoFactorChallengeExpired(error: unknown): boolean {
   return error instanceof ApiError && error.status === 401 && error.message === "two factor challenge expired";
-}
-
-function base64URL(bytes: Uint8Array): string {
-  let binary = "";
-  bytes.forEach((byte) => {
-    binary += String.fromCharCode(byte);
-  });
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
-}
-
-export async function createProviderPKCE() {
-  const verifierBytes = new Uint8Array(48);
-  window.crypto.getRandomValues(verifierBytes);
-  const verifier = base64URL(verifierBytes);
-  const digest = await window.crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
-  return {
-    verifier,
-    challenge: base64URL(new Uint8Array(digest)),
-  };
 }
