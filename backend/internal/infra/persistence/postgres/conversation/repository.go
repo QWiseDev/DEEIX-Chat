@@ -168,19 +168,51 @@ func (r *Repo) ListConversationsByUser(
 	return results, total, nil
 }
 
+// ListConversationsForSearch 返回搜索页所需的会话窗口，不执行精确总数统计。
+func (r *Repo) ListConversationsForSearch(
+	ctx context.Context,
+	userID uint,
+	offset int,
+	limit int,
+	searchQuery string,
+) ([]domainconversation.Conversation, error) {
+	items := make([]models.Conversation, 0, limit)
+	query := r.db.WithContext(ctx).
+		Model(&models.Conversation{}).
+		Where("user_id = ?", userID)
+	query = applyConversationSearchFilter(query, searchQuery)
+	if err := query.
+		Order("updated_at DESC").
+		Order("id DESC").
+		Offset(offset).
+		Limit(limit).
+		Find(&items).Error; err != nil {
+		return nil, translateError(err)
+	}
+
+	results := toConversationDomains(items)
+	if err := r.hydrateConversationShareSummaries(ctx, results); err != nil {
+		return nil, err
+	}
+	if err := r.hydrateConversationProjectSummaries(ctx, results); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
 func applyConversationSearchFilter(query *gorm.DB, searchQuery string) *gorm.DB {
 	keyword := strings.TrimSpace(searchQuery)
 	if keyword == "" {
 		return query
 	}
 
-	like := "%" + strings.ToLower(keyword) + "%"
+	like := conversationSearchLikePattern(keyword)
 	return query.Where(
-		`(LOWER(title) LIKE ?
-			OR LOWER(public_id) LIKE ?
-			OR LOWER(labels_json) LIKE ?
-			OR LOWER(model) LIKE ?
-			OR LOWER(provider) LIKE ?
+		`(LOWER(title) LIKE ? ESCAPE '!'
+			OR LOWER(public_id) LIKE ? ESCAPE '!'
+			OR LOWER(labels_json) LIKE ? ESCAPE '!'
+			OR LOWER(model) LIKE ? ESCAPE '!'
+			OR LOWER(provider) LIKE ? ESCAPE '!'
 			OR EXISTS (
 				SELECT 1
 				FROM chat_conversation_projects AS projects
@@ -188,9 +220,9 @@ func applyConversationSearchFilter(query *gorm.DB, searchQuery string) *gorm.DB 
 					AND projects.user_id = chat_conversations.user_id
 					AND projects.deleted_at IS NULL
 					AND (
-						LOWER(projects.name) LIKE ?
-						OR LOWER(projects.public_id) LIKE ?
-						OR LOWER(projects.description) LIKE ?
+						LOWER(projects.name) LIKE ? ESCAPE '!'
+						OR LOWER(projects.public_id) LIKE ? ESCAPE '!'
+						OR LOWER(projects.description) LIKE ? ESCAPE '!'
 					)
 			)
 			OR EXISTS (
@@ -199,7 +231,8 @@ func applyConversationSearchFilter(query *gorm.DB, searchQuery string) *gorm.DB 
 				WHERE messages.conversation_id = chat_conversations.id
 					AND messages.user_id = chat_conversations.user_id
 					AND messages.deleted_at IS NULL
-					AND LOWER(messages.content) LIKE ?
+					AND messages.role IN ('user', 'assistant')
+					AND LOWER(messages.content) LIKE ? ESCAPE '!'
 			))`,
 		like,
 		like,
@@ -211,6 +244,16 @@ func applyConversationSearchFilter(query *gorm.DB, searchQuery string) *gorm.DB 
 		like,
 		like,
 	)
+}
+
+func conversationSearchLikePattern(searchQuery string) string {
+	keyword := strings.ToLower(strings.TrimSpace(searchQuery))
+	keyword = strings.NewReplacer(
+		"!", "!!",
+		"%", "!%",
+		"_", "!_",
+	).Replace(keyword)
+	return "%" + keyword + "%"
 }
 
 func (r *Repo) hydrateConversationShareSummaries(ctx context.Context, items []domainconversation.Conversation) error {
@@ -509,9 +552,6 @@ func (r *Repo) UpdateConversationMetadata(ctx context.Context, conversationID ui
 			strings.TrimSpace(patch.Title),
 		)
 	}
-	if strings.TrimSpace(patch.LabelsJSON) != "" {
-		updates["labels_json"] = strings.TrimSpace(patch.LabelsJSON)
-	}
 	if len(updates) == 0 {
 		var current models.Conversation
 		if err := r.db.WithContext(ctx).Where("id = ?", conversationID).First(&current).Error; err != nil {
@@ -533,6 +573,56 @@ func (r *Repo) UpdateConversationMetadata(ctx context.Context, conversationID ui
 	}
 	updated := toConversationDomain(current)
 	return &updated, nil
+}
+
+// UpdateConversationLabelsByPublicID 按用户归属更新手动管理的会话标签。
+func (r *Repo) UpdateConversationLabelsByPublicID(
+	ctx context.Context,
+	userID uint,
+	publicID string,
+	labelsJSON string,
+) (*domainconversation.Conversation, error) {
+	result := r.db.WithContext(ctx).
+		Model(&models.Conversation{}).
+		Where("user_id = ? AND public_id = ?", userID, publicID).
+		Updates(map[string]interface{}{
+			"labels_json":             strings.TrimSpace(labelsJSON),
+			"labels_manually_managed": true,
+		})
+	if result.Error != nil {
+		return nil, translateError(result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return nil, repository.ErrNotFound
+	}
+	return r.GetConversationByPublicID(ctx, publicID, userID)
+}
+
+// SetGeneratedConversationLabelsIfEligible 仅为空且未被用户接管时写入自动标签。
+func (r *Repo) SetGeneratedConversationLabelsIfEligible(
+	ctx context.Context,
+	conversationID uint,
+	labelsJSON string,
+) (*domainconversation.Conversation, bool, error) {
+	result := r.db.WithContext(ctx).
+		Model(&models.Conversation{}).
+		Where("id = ?", conversationID).
+		Where(
+			fmt.Sprintf("labels_manually_managed = ? AND lower(%s(labels_json)) IN ?", r.trimFunctionName()),
+			false,
+			[]string{"", "null", "[]"},
+		).
+		Update("labels_json", strings.TrimSpace(labelsJSON))
+	if result.Error != nil {
+		return nil, false, translateError(result.Error)
+	}
+
+	var current models.Conversation
+	if err := r.db.WithContext(ctx).Where("id = ?", conversationID).First(&current).Error; err != nil {
+		return nil, false, translateError(err)
+	}
+	updated := toConversationDomain(current)
+	return &updated, result.RowsAffected > 0, nil
 }
 
 // UpdateConversationStarByPublicID 更新会话星标状态。
@@ -1930,6 +2020,79 @@ ORDER BY id ASC`
 	return toMessageDomains(path), nil
 }
 
+// ListLatestBranchPreviewMessages 返回最新叶节点所在分支末尾的轻量消息。
+func (r *Repo) ListLatestBranchPreviewMessages(
+	ctx context.Context,
+	conversationID uint,
+	maxDepth int,
+	limit int,
+) ([]domainconversation.Message, error) {
+	if maxDepth <= 0 {
+		maxDepth = 100
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+
+	type previewMessageRow struct {
+		ID           uint   `gorm:"column:id"`
+		PublicID     string `gorm:"column:public_id"`
+		Role         string `gorm:"column:role"`
+		Content      string `gorm:"column:content"`
+		ErrorMessage string `gorm:"column:error_message"`
+	}
+	rows := make([]previewMessageRow, 0, limit)
+	const previewSQL = `
+WITH RECURSIVE ancestors AS (
+    SELECT id, conversation_id, parent_message_id, public_id, role, content, error_message, 1 AS depth
+    FROM chat_messages
+    WHERE id = (
+        SELECT id
+        FROM chat_messages
+        WHERE conversation_id = ? AND deleted_at IS NULL
+        ORDER BY id DESC
+        LIMIT 1
+    )
+      AND conversation_id = ?
+      AND deleted_at IS NULL
+    UNION ALL
+    SELECT m.id, m.conversation_id, m.parent_message_id, m.public_id, m.role, m.content, m.error_message, a.depth + 1
+    FROM chat_messages AS m
+    INNER JOIN ancestors AS a ON m.id = a.parent_message_id
+    WHERE a.parent_message_id IS NOT NULL
+      AND a.depth < ?
+      AND m.conversation_id = ?
+      AND m.deleted_at IS NULL
+), visible_messages AS (
+    SELECT id, public_id, role, content, error_message, depth
+    FROM ancestors
+    WHERE role IN ('user', 'assistant')
+    ORDER BY depth ASC
+    LIMIT ?
+)
+SELECT id, public_id, role, content, error_message
+FROM visible_messages
+ORDER BY depth DESC`
+	if err := r.db.WithContext(ctx).
+		Raw(previewSQL, conversationID, conversationID, maxDepth, conversationID, limit).
+		Scan(&rows).Error; err != nil {
+		return nil, translateError(err)
+	}
+
+	items := make([]domainconversation.Message, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, domainconversation.Message{
+			ID:             row.ID,
+			ConversationID: conversationID,
+			PublicID:       row.PublicID,
+			Role:           row.Role,
+			Content:        row.Content,
+			ErrorMessage:   row.ErrorMessage,
+		})
+	}
+	return items, nil
+}
+
 // ListMessageAncestorsUntil 从指定消息向上遍历 parent_message_id 链，直到命中 stopMessageID 或达到深度上限。
 func (r *Repo) ListMessageAncestorsUntil(ctx context.Context, conversationID uint, leafMessageID uint, stopMessageID uint, maxDepth int) ([]domainconversation.Message, bool, error) {
 	if maxDepth <= 0 {
@@ -3199,6 +3362,7 @@ func toConversationDomain(item models.Conversation) domainconversation.Conversat
 		PublicID:              item.PublicID,
 		Title:                 item.Title,
 		LabelsJSON:            labelsJSON,
+		LabelsManuallyManaged: item.LabelsManuallyManaged,
 		Model:                 item.Model,
 		Provider:              item.Provider,
 		SessionKey:            item.SessionKey,
@@ -3256,6 +3420,7 @@ func toConversationModel(item *domainconversation.Conversation) models.Conversat
 		PublicID:              item.PublicID,
 		Title:                 item.Title,
 		LabelsJSON:            labelsJSON,
+		LabelsManuallyManaged: item.LabelsManuallyManaged,
 		Model:                 item.Model,
 		Provider:              item.Provider,
 		SessionKey:            item.SessionKey,

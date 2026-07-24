@@ -97,6 +97,7 @@ type messageTraceRecorder struct {
 	upstreamThinkPendingKind    string
 	upstreamThinkPendingReason  map[string]interface{}
 	upstreamThinkBufferedByte   int
+	failed                      bool
 }
 
 func formatTraceStep(label string, detail string) string {
@@ -555,9 +556,17 @@ func (r *messageTraceRecorder) complete() {
 }
 
 func (r *messageTraceRecorder) fail(err error) {
+	r.failWithContext(r.ctx, err)
+}
+
+func (r *messageTraceRecorder) failWithContext(ctx context.Context, err error) {
 	if !r.enabled() {
 		return
 	}
+	if r.failed {
+		return
+	}
+	r.failed = true
 	now := time.Now()
 	summary := traceErrorSummary(err)
 	detail := traceErrorDetail(err)
@@ -576,17 +585,18 @@ func (r *messageTraceRecorder) fail(err error) {
 		}
 		mergeTracePayload(process.payload, payload)
 		process.endedAt = &now
-		r.persistDraft(process, true)
+		r.persistDraftCtx(ctx, process, true)
 	}
 	if r.upstreamThink != nil {
 		r.upstreamThink.status = messageTraceStatusError
 		r.upstreamThink.endedAt = &now
-		r.persistDraft(r.upstreamThink, true)
+		r.flushUpstreamThinkLiveUpdate(r.upstreamThink, true, false)
+		r.persistDraftCtx(ctx, r.upstreamThink, true)
 	}
 	if r.tools != nil {
 		r.tools.status = messageTraceStatusError
 		r.tools.endedAt = &now
-		r.persistDraft(r.tools, true)
+		r.persistDraftCtx(ctx, r.tools, true)
 	}
 }
 
@@ -595,6 +605,13 @@ func (r *messageTraceRecorder) attachToMessage(message *model.Message) {
 		return
 	}
 	message.ProcessTrace = r.snapshot()
+}
+
+func (r *messageTraceRecorder) upstreamThinkContent() string {
+	if r == nil || r.upstreamThink == nil {
+		return ""
+	}
+	return r.upstreamThink.contentMarkdown
 }
 
 func (r *messageTraceRecorder) snapshot() *model.MessageProcessTrace {
@@ -671,6 +688,9 @@ func (r *messageTraceRecorder) persistDraftCtx(ctx context.Context, draft *messa
 		r.upsertSnapshotEvent(draft, payloadJSON)
 	}
 	if !force && !r.cfg.ProcessTracePersistInflight {
+		return
+	}
+	if r.service == nil || r.service.repo == nil {
 		return
 	}
 	r.persistMessageTraceRow(ctx, draft, payloadJSON)

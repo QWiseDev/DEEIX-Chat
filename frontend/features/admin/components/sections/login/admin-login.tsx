@@ -33,7 +33,7 @@ import {
   AdminSortableList,
   moveSortableItem,
 } from "@/features/admin/components/sections/shared/admin-sortable-list";
-import type { IdentityProviderPayload } from "@/features/admin/api/auth";
+import type { UpsertIdentityProviderRequest } from "@deeix/api-contract";
 import { Table, TableBody, TableCell, TableEmptyRow, TableHead, TableHeader, TableLoadingRow, TableRow } from "@/components/ui/table";
 import { ApiError } from "@/shared/api/http-client";
 import { resolveAccessToken } from "@/shared/auth/resolve-access-token";
@@ -56,6 +56,7 @@ import {
   buildLoginSettingsGroups,
   createProviderForm,
   DEFAULT_PROVIDER_FORM,
+  type IdentityProviderForm,
   fieldID,
   flattenLoginSettings,
   includesEmailVerificationSettings,
@@ -102,7 +103,7 @@ export function AdminLoginSettingsPage() {
   const [deleteProviderTarget, setDeleteProviderTarget] = React.useState<IdentityProviderDTO | null>(null);
   const [forceDeleteProviderTarget, setForceDeleteProviderTarget] = React.useState<IdentityProviderDTO | null>(null);
   const [forceDeleteProviderMessage, setForceDeleteProviderMessage] = React.useState("");
-  const [providerForm, setProviderForm] = React.useState<IdentityProviderPayload>(DEFAULT_PROVIDER_FORM);
+  const [providerForm, setProviderForm] = React.useState<IdentityProviderForm>(DEFAULT_PROVIDER_FORM);
   const [oidcEndpointMode, setOidcEndpointMode] = React.useState<"issuer" | "discovery">("issuer");
   const [frontendOrigin, setFrontendOrigin] = React.useState("");
   const [loading, setLoading] = React.useState(true);
@@ -248,7 +249,7 @@ export function AdminLoginSettingsPage() {
     [configuredMap, savedMap, settingsMap, t],
   );
 
-  const openCreateProvider = React.useCallback((type: IdentityProviderPayload["type"]) => {
+  const openCreateProvider = React.useCallback((type: UpsertIdentityProviderRequest["type"]) => {
     setEditingProvider(null);
     setProviderForm(createProviderForm({
       type,
@@ -277,7 +278,7 @@ export function AdminLoginSettingsPage() {
     try {
       const token = await resolveAccessToken();
       if (!token) return;
-      const payload = {
+      const payload: UpsertIdentityProviderRequest = {
         ...providerForm,
         registrationEnabled: providerForm.loginEnabled && providerForm.registrationEnabled,
       };
@@ -688,7 +689,7 @@ export function AdminLoginSettingsPage() {
               <Select
                 value={providerForm.type}
                 onValueChange={(value) => {
-                  const type = value as IdentityProviderPayload["type"];
+                  const type = value as UpsertIdentityProviderRequest["type"];
                   setProviderForm((prev) => ({ ...prev, type }));
                   if (type === "oidc") setOidcEndpointMode(providerForm.discoveryURL ? "discovery" : "issuer");
                 }}

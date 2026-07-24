@@ -26,13 +26,13 @@ export function useChatSubmitStream({
   selectedToolIDs,
   selectedSkills,
   htmlVisualPromptEnabled,
-  htmlVisualColorMode,
   options,
   draft,
   attachments,
   maxFilesPerMessage,
   uploading,
   restoreDraftOnFailure,
+  autoGenerateLabels,
   prependNewConversation,
   onConversationCreated,
   touchByPublicID,
@@ -63,13 +63,13 @@ export function useChatSubmitStream({
   selectedToolIDs: number[];
   selectedSkills: SkillSummaryDTO[];
   htmlVisualPromptEnabled: boolean;
-  htmlVisualColorMode: "light" | "dark";
   options: ConversationOptions;
   draft: string;
   attachments: PendingAttachment[];
   maxFilesPerMessage: number;
   uploading: boolean;
   restoreDraftOnFailure: boolean;
+  autoGenerateLabels: boolean;
   prependNewConversation: (platformModelName: string) => Promise<ConversationDTO | null | undefined>;
   onConversationCreated?: (conversationPublicID: string) => void;
   touchByPublicID: (publicID: string, patch?: Partial<ConversationDTO>) => void;
@@ -104,13 +104,13 @@ export function useChatSubmitStream({
     selectedToolIDs,
     selectedSkills,
     htmlVisualPromptEnabled,
-    htmlVisualColorMode,
     options,
     draft,
     attachments,
     maxFilesPerMessage,
     uploading,
     restoreDraftOnFailure,
+    autoGenerateLabels,
     prependNewConversation,
     onConversationCreated,
     touchByPublicID,

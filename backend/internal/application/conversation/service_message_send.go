@@ -217,6 +217,7 @@ func (s *Service) sendMessageInternal(
 	var totalServerSideToolUsage map[string]int64
 	var responsesBackgroundRouteConfig llm.RouteConfig
 	var responsesBackgroundRecovery openAIResponsesBackgroundRecoveryState
+	responsesBackgroundUsageRecovered := false
 	userContentEstimatedInputTokens := int64(0)
 	usageAccumulator := &messageUsageAccumulator{}
 	upstreamCallStarted := false
@@ -228,29 +229,32 @@ func (s *Service) sendMessageInternal(
 		if retErr != nil {
 			if errors.Is(retErr, ErrMessageGenerationCanceled) {
 				if usage, ok := s.recoverOpenAIResponsesBackgroundUsage(responsesBackgroundRouteConfig, responsesBackgroundRecovery); ok {
+					responsesBackgroundUsageRecovered = true
 					if delta := diffLLMUsage(usage, responsesBackgroundRecovery.ObservedUsage); delta != (llm.Usage{}) {
 						usageAccumulator.addObservedUsage(delta)
 					}
 				}
 			}
 			if retained := s.persistInterruptedMessageGeneration(ctx, persistInterruptedMessageGenerationInput{
-				SendInput:             input,
-				UserMessage:           userMessage,
-				AssistantMessage:      assistantMessage,
-				AssistantText:         streamedText.String(),
-				EstimatedInputTokens:  usageAccumulator.interruptedInputTokens(),
-				UpstreamCallStarted:   upstreamCallStarted,
-				Usage:                 usageAccumulator.usage(),
-				AssistantLatency:      time.Since(startedAt).Milliseconds(),
-				Error:                 retErr,
-				ToolCallRows:          toolCallRows,
-				PersistedToolCallKeys: persistedToolCallKeys,
-				TraceRecorder:         traceRecorder,
-				Route:                 resolvedRoute,
-				EffectiveOptions:      filteredOptions,
-				ServerSideToolUsage:   totalServerSideToolUsage,
-				StartedAt:             startedAt,
-				ReuseUserMessage:      reuseUserMessage,
+				SendInput:              input,
+				UserMessage:            userMessage,
+				AssistantMessage:       assistantMessage,
+				AssistantText:          streamedText.String(),
+				AssistantReasoningText: traceRecorder.upstreamThinkContent(),
+				EstimatedInputTokens:   usageAccumulator.interruptedInputTokens(),
+				UpstreamCallStarted:    upstreamCallStarted,
+				Usage:                  usageAccumulator.usage(),
+				UsageRecovered:         responsesBackgroundUsageRecovered,
+				AssistantLatency:       time.Since(startedAt).Milliseconds(),
+				Error:                  retErr,
+				ToolCallRows:           toolCallRows,
+				PersistedToolCallKeys:  persistedToolCallKeys,
+				TraceRecorder:          traceRecorder,
+				Route:                  resolvedRoute,
+				EffectiveOptions:       filteredOptions,
+				ServerSideToolUsage:    totalServerSideToolUsage,
+				StartedAt:              startedAt,
+				ReuseUserMessage:       reuseUserMessage,
 			}); retained != nil {
 				result = retained
 				applyRetainedGenerationRunUsage(run, retained, len(toolCallRows), startedAt)
@@ -472,6 +476,8 @@ func (s *Service) sendMessageInternal(
 	// 收集并行预取结果，再规划本轮可发送的 PromptScope。
 	prefetch := <-prefetchCh
 	contextMessages = s.expandContextMessagesToSnapshotBoundary(ctx, input.ConversationID, userMessage.ID, contextMessages, prefetch.snapshot, compactPolicy)
+	// 快照扩展可能重新加载数据库中的原始 error 状态；在最终分支路径上统一恢复可用的重试上下文。
+	contextMessages = recoverAssistantRetryUserStates(contextMessages)
 	promptScope := buildPromptScope(contextMessages, prefetch.snapshot, compactPolicy)
 	promptMessages := s.applyContextTokenBudget(promptScope.activeMessages(), route.UpstreamModel, route.ModelCapabilitiesJSON, reasoningContentPassback)
 	ragQuery := buildRAGQuery(promptMessages, input.Content, cfg.RAGQueryHistoryTurns)
@@ -505,7 +511,7 @@ func (s *Service) sendMessageInternal(
 
 	// ContextAssembler 只承载真正的系统级行为指令；资料型上下文稍后进入用户 XML。
 	assembler := NewContextAssembler(int64(cfg.ContextMaxInputTokens))
-	systemPrompt := resolveMessageSystemPromptInjection(cfg, route, conversation.ProjectSystemPrompt, input.HTMLVisualPromptEnabled, input.HTMLVisualColorMode)
+	systemPrompt := resolveMessageSystemPromptInjection(cfg, route, conversation.ProjectSystemPrompt, input.HTMLVisualPromptEnabled)
 	if systemPrompt.Content != "" {
 		if systemPrompt.InlineToUser {
 			historyMsgs = inlineSystemPromptIntoLatestUserMessage(historyMsgs, systemPrompt.Content)
@@ -1452,7 +1458,7 @@ func (s *Service) sendMessageInternal(
 	return &SendMessageResult{
 		UserMessage:           *userMessage,
 		AssistantMessage:      *assistantMessage,
-		MetadataRefreshHint:   conversationMetadataRefreshHint(*conversation, *userMessage),
+		MetadataRefreshHint:   s.resolveConversationMetadataRefreshHint(ctx, *conversation, *userMessage),
 		Billable:              true,
 		UpstreamID:            run.UpstreamID,
 		UpstreamName:          run.UpstreamName,

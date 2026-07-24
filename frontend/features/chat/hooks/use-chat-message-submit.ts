@@ -19,7 +19,10 @@ import {
   toPendingAttachments,
   toPendingProcessTrace,
 } from "@/features/chat/model/message-submit";
-import { readLiveUpstreamThinkTrace } from "@/features/chat/model/upstream-think-store";
+import {
+  preserveRicherLiveUpstreamThinkTrace,
+  readLiveUpstreamThinkTrace,
+} from "@/features/chat/model/upstream-think-store";
 import {
   resolveErrorDetails,
   resolveErrorMessage,
@@ -62,6 +65,7 @@ const CONVERSATION_METADATA_REFRESH_INITIAL_DELAY_MS = 800;
 const CONVERSATION_METADATA_REFRESH_MAX_DELAY_MS = 5_000;
 const CONVERSATION_METADATA_REFRESH_BACKOFF = 1.5;
 const MAX_CONCURRENT_RUNS = 5;
+const GENERATION_CANCEL_SETTLEMENT_TIMEOUT_MS = 25_000;
 
 function resolveSubmitBlockDescription(
   reason: ChatSubmitBlockReason,
@@ -137,7 +141,17 @@ type ActiveStream = {
   controller: AbortController;
   runID: string;
   accessToken: string | null;
+  cancelRequested: boolean;
+  cancelSettlementTimer: number | null;
 };
+
+function clearCancelSettlementTimer(active: ActiveStream) {
+  if (active.cancelSettlementTimer === null) {
+    return;
+  }
+  window.clearTimeout(active.cancelSettlementTimer);
+  active.cancelSettlementTimer = null;
+}
 
 function replaceCompletedBranchSelection(
   previous: Record<string, string>,
@@ -181,7 +195,6 @@ type QueuedChatSubmission = {
   selectedToolIDs: number[];
   selectedSkills: SkillSummaryDTO[];
   htmlVisualPromptEnabled: boolean;
-  htmlVisualColorMode: "light" | "dark";
 };
 
 function sleep(ms: number): Promise<void> {
@@ -225,12 +238,16 @@ function conversationTitleFromFirstUserMessage(content: string): string {
   return Array.from(value).slice(0, 16).join("").trim();
 }
 
-function hasPendingGeneratedConversationMetadata(item: ConversationDTO | null, fallbackTitle = ""): boolean {
+function hasPendingGeneratedConversationMetadata(
+  item: ConversationDTO | null,
+  autoGenerateLabels: boolean,
+  fallbackTitle = "",
+): boolean {
   return (
     !item ||
     isPlaceholderConversationTitle(item.title) ||
     isFallbackConversationTitle(item.title, fallbackTitle) ||
-    normalizeLabelsJSON(item.labelsJSON) === "[]"
+    (autoGenerateLabels && normalizeLabelsJSON(item.labelsJSON) === "[]")
   );
 }
 
@@ -249,9 +266,10 @@ function hasGeneratedConversationMetadataChanged(
 function shouldPollGeneratedConversationMetadata(
   item: ConversationDTO | null,
   result: SendMessageResult | null | undefined,
+  autoGenerateLabels: boolean,
   fallbackTitle = "",
 ): boolean {
-  if (!hasPendingGeneratedConversationMetadata(item, fallbackTitle)) {
+  if (!hasPendingGeneratedConversationMetadata(item, autoGenerateLabels, fallbackTitle)) {
     return false;
   }
   const hint = result?.metadataRefreshHint?.trim();
@@ -265,6 +283,7 @@ async function refreshGeneratedConversationMetadata(
   accessToken: string,
   conversationPublicID: string,
   previous: ConversationDTO | null,
+  autoGenerateLabels: boolean,
   fallbackTitle: string,
   touchByPublicID: (publicID: string, patch?: Partial<ConversationDTO>) => void,
 ): Promise<void> {
@@ -286,7 +305,7 @@ async function refreshGeneratedConversationMetadata(
     if (hasGeneratedConversationMetadataChanged(current, latest)) {
       touchByPublicID(conversationPublicID, latest);
       current = latest;
-      if (!hasPendingGeneratedConversationMetadata(latest, fallbackTitle)) {
+      if (!hasPendingGeneratedConversationMetadata(latest, autoGenerateLabels, fallbackTitle)) {
         return;
       }
     }
@@ -307,13 +326,13 @@ export function useChatMessageSubmit({
   selectedToolIDs,
   selectedSkills,
   htmlVisualPromptEnabled,
-  htmlVisualColorMode,
   options,
   draft,
   attachments,
   maxFilesPerMessage,
   uploading,
   restoreDraftOnFailure,
+  autoGenerateLabels,
   prependNewConversation,
   onConversationCreated,
   touchByPublicID,
@@ -350,13 +369,13 @@ export function useChatMessageSubmit({
   selectedToolIDs: number[];
   selectedSkills: SkillSummaryDTO[];
   htmlVisualPromptEnabled: boolean;
-  htmlVisualColorMode: "light" | "dark";
   options: ConversationOptions;
   draft: string;
   attachments: PendingAttachment[];
   maxFilesPerMessage: number;
   uploading: boolean;
   restoreDraftOnFailure: boolean;
+  autoGenerateLabels: boolean;
   prependNewConversation: (platformModelName: string) => Promise<ConversationDTO | null | undefined>;
   onConversationCreated?: (conversationPublicID: string) => void;
   touchByPublicID: (publicID: string, patch?: Partial<ConversationDTO>) => void;
@@ -441,6 +460,7 @@ export function useChatMessageSubmit({
 
     for (const active of activeStreamsRef.current.values()) {
       // 会话切换只解除当前页面订阅，不取消服务端仍在执行的 run。
+      clearCancelSettlementTimer(active);
       active.controller.abort();
       activeGenerationRunsRefRef.current?.current.delete(active.runID);
     }
@@ -546,7 +566,6 @@ export function useChatMessageSubmit({
       const requestSelectedToolIDs = queuedSubmission?.selectedToolIDs ?? selectedToolIDs;
       const requestSelectedSkills = queuedSubmission?.selectedSkills ?? selectedSkills;
       const requestHTMLVisualPromptEnabled = queuedSubmission?.htmlVisualPromptEnabled ?? htmlVisualPromptEnabled;
-      const requestHTMLVisualColorMode = queuedSubmission?.htmlVisualColorMode ?? htmlVisualColorMode;
       const selectedModel = modelOptions.find((item) => item.platformModelName === requestPlatformModelName) ?? null;
       const resolvedBranchReason = branchReason ?? "default";
       const concurrentBranchRun = resolvedBranchReason === "retry" || resolvedBranchReason === "edit";
@@ -638,6 +657,8 @@ export function useChatMessageSubmit({
         controller: streamAbortController,
         runID: clientRunID,
         accessToken: null,
+        cancelRequested: false,
+        cancelSettlementTimer: null,
       });
       syncActiveRunCount();
       if (resetComposer) {
@@ -688,18 +709,19 @@ export function useChatMessageSubmit({
         }
         const activeStream = activeStreamsRef.current.get(clientRunID);
         if (activeStream?.controller === streamAbortController) {
-          activeStreamsRef.current.set(clientRunID, {
-            controller: streamAbortController,
-            runID: clientRunID,
-            accessToken: token,
-          });
+          activeStream.accessToken = token;
         }
         let metadataFallbackTitle = "";
         const startMetadataRefresh = (result?: SendMessageResult | null) => {
           if (
             !targetConversationID ||
             metadataRefreshInFlight ||
-            !shouldPollGeneratedConversationMetadata(targetConversation, result, metadataFallbackTitle)
+            !shouldPollGeneratedConversationMetadata(
+              targetConversation,
+              result,
+              autoGenerateLabels,
+              metadataFallbackTitle,
+            )
           ) {
             return;
           }
@@ -708,6 +730,7 @@ export function useChatMessageSubmit({
             token,
             targetConversationID,
             targetConversation,
+            autoGenerateLabels,
             metadataFallbackTitle,
             touchByPublicID,
           )
@@ -755,7 +778,6 @@ export function useChatMessageSubmit({
           }
           touchByPublicID(targetConversationID, { title: optimisticTitle });
         }
-        startMetadataRefresh(null);
         const commonStreamPayload = {
           model: requestPlatformModelName,
           options: Object.keys(sanitizedOptions).length > 0 ? sanitizedOptions : undefined,
@@ -858,7 +880,6 @@ export function useChatMessageSubmit({
             selectedToolIDs: requestSelectedToolIDs.length > 0 ? requestSelectedToolIDs : undefined,
             skillIDs: requestSelectedSkills.length > 0 ? requestSelectedSkills.map((skill) => skill.id) : undefined,
             htmlVisualPrompt: requestHTMLVisualPromptEnabled || undefined,
-            htmlVisualColorMode: requestHTMLVisualPromptEnabled ? requestHTMLVisualColorMode : undefined,
           };
           completed = await streamConversationMessage(token, targetConversationID, chatPayload, streamOptions);
         } else if (submitTask === "video_generation") {
@@ -936,7 +957,13 @@ export function useChatMessageSubmit({
             ),
             assistantReasoningTokens: completed.assistantMessage.reasoningTokens,
             assistantLatencyMS: completed.assistantMessage.latencyMS,
-            assistantProcessTrace: toPendingProcessTrace(completed.assistantMessage.processTrace),
+            assistantProcessTrace:
+              assistantMessageStatus === "interrupted"
+                ? preserveRicherLiveUpstreamThinkTrace(
+                    toPendingProcessTrace(completed.assistantMessage.processTrace),
+                    readLiveUpstreamThinkTrace(clientRunID),
+                  )
+                : toPendingProcessTrace(completed.assistantMessage.processTrace),
             assistantStatus: assistantMessageStatus,
             assistantErrorCode: completed.assistantMessage.errorCode,
             assistantErrorMessage: completed.assistantMessage.errorMessage,
@@ -985,7 +1012,7 @@ export function useChatMessageSubmit({
           activeConversationRef.current = { ...currentConversation, ...conversationPatch };
         }
         touchByPublicID(targetConversationID, conversationPatch);
-        if (assistantMessageSucceeded) {
+        if (assistantMessageSucceeded || completed.metadataRefreshHint?.trim() === "pending") {
           startMetadataRefresh(completed);
         }
         releaseAttachments(effectiveAttachments);
@@ -1045,7 +1072,9 @@ export function useChatMessageSubmit({
         }
         return false;
       } finally {
-        if (activeStreamsRef.current.get(clientRunID)?.controller === streamAbortController) {
+        const activeStream = activeStreamsRef.current.get(clientRunID);
+        if (activeStream?.controller === streamAbortController) {
+          clearCancelSettlementTimer(activeStream);
           activeStreamsRef.current.delete(clientRunID);
         }
         activeGenerationRunsRef?.current.delete(clientRunID);
@@ -1058,6 +1087,7 @@ export function useChatMessageSubmit({
     },
     [
       activeGenerationRunsRef,
+      autoGenerateLabels,
       failedGenerationRunsRef,
       enqueueUpstreamThinkDelta,
       enqueueStreamText,
@@ -1074,7 +1104,6 @@ export function useChatMessageSubmit({
       selectedToolIDs,
       selectedSkills,
       htmlVisualPromptEnabled,
-      htmlVisualColorMode,
       selectedPlatformModelName,
       setAttachments,
       setBranchSelections,
@@ -1111,7 +1140,6 @@ export function useChatMessageSubmit({
         selectedToolIDs: selectedToolIDs.slice(),
         selectedSkills: selectedSkills.slice(),
         htmlVisualPromptEnabled,
-        htmlVisualColorMode,
       },
     ]);
     setDraft("");
@@ -1120,7 +1148,6 @@ export function useChatMessageSubmit({
   }, [
     attachments,
     draft,
-    htmlVisualColorMode,
     htmlVisualPromptEnabled,
     options,
     selectedPlatformModelName,
@@ -1154,10 +1181,33 @@ export function useChatMessageSubmit({
     if (!active) {
       return false;
     }
-    if (active.accessToken) {
-      void cancelMessageGeneration(active.accessToken, active.runID).catch(() => undefined);
+    if (active.cancelRequested) {
+      return true;
     }
-    active.controller.abort();
+    if (!active.accessToken) {
+      active.controller.abort();
+      return true;
+    }
+
+    active.cancelRequested = true;
+    active.cancelSettlementTimer = window.setTimeout(() => {
+      if (activeStreamsRef.current.get(active.runID) !== active) {
+        return;
+      }
+      active.controller.abort();
+      reload();
+    }, GENERATION_CANCEL_SETTLEMENT_TIMEOUT_MS);
+
+    // Keep the stream connected so its terminal payload can replace optimistic IDs
+    // and retain the final partial content/usage produced during cancellation.
+    void cancelMessageGeneration(active.accessToken, active.runID).catch(() => {
+      if (activeStreamsRef.current.get(active.runID) !== active) {
+        return;
+      }
+      clearCancelSettlementTimer(active);
+      active.controller.abort();
+      reload();
+    });
     return true;
   }, [
     currentLeafMessage?.isPending,

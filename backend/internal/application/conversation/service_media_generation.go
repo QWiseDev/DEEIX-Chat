@@ -521,7 +521,7 @@ func (s *Service) StreamMediaImage(ctx context.Context, input MediaImageInput) (
 	return &SendMessageResult{
 		UserMessage:         *userMessage,
 		AssistantMessage:    *assistantMessage,
-		MetadataRefreshHint: conversationMetadataRefreshHint(*conversation, *userMessage),
+		MetadataRefreshHint: s.resolveConversationMetadataRefreshHint(ctx, *conversation, *userMessage),
 		Billable:            true,
 		UpstreamID:          route.UpstreamID,
 		UpstreamName:        route.UpstreamName,

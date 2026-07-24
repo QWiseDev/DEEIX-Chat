@@ -150,7 +150,6 @@ type SendMessageInput struct {
 	SelectedToolIDs         []uint
 	SkillIDs                []uint
 	HTMLVisualPromptEnabled bool
-	HTMLVisualColorMode     string
 	ParentMessagePublicID   string
 	SourceMessagePublicID   string
 	BranchReason            string
@@ -179,6 +178,7 @@ type SendMessageResult struct {
 	EffectiveOptions      map[string]interface{}
 	UsageSpeed            string
 	UsageServiceTier      string
+	UsageSource           string
 	RawUsageJSON          string
 	CacheWrite5mTokens    int64
 	CacheWrite1hTokens    int64

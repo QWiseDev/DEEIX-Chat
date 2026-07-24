@@ -1,47 +1,34 @@
+import type {
+  UsageStatisticsMetricsResponse,
+  UsageStatisticsModelRankResponse,
+  UsageStatisticsResponse,
+  UsageStatisticsTrendResponse,
+  UsageStatisticsUserRankResponse,
+} from "@deeix/api-contract";
 import { authedRequest } from "@/shared/api/authed-client";
 
 export type AdminUsageStatisticsRankBy = "cost" | "tokens" | "calls";
 export type AdminUsageStatisticsBillingScope = "all" | "free" | "billable";
 export type AdminUsageStatisticsSection = "all" | "models" | "users";
 
-export type AdminUsageStatisticsMetricsDTO = {
-  recordCount: number;
-  inputTokens: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-  outputTokens: number;
-  reasoningTokens: number;
-  totalTokens: number;
-  callCount: number;
-  avgLatencyMS: number;
-  billedNanousd: number;
-  billedUSD: number;
-};
+export type AdminUsageStatisticsMetricsDTO = UsageStatisticsMetricsResponse;
 
-export type AdminUsageStatisticsTrendDTO = AdminUsageStatisticsMetricsDTO & {
-  periodStart: string;
-};
+export type AdminUsageStatisticsTrendDTO = UsageStatisticsTrendResponse;
 
-export type AdminUsageStatisticsModelRankDTO = AdminUsageStatisticsMetricsDTO & {
-  platformModelName: string;
+export type AdminUsageStatisticsModelRankDTO = Omit<UsageStatisticsModelRankResponse, "trend"> & {
   trend: AdminUsageStatisticsTrendDTO[];
 };
 
-export type AdminUsageStatisticsUserRankDTO = AdminUsageStatisticsMetricsDTO & {
-  userID: number;
-  username: string;
-  userDisplayName: string;
-  userLabel: string;
+export type AdminUsageStatisticsUserRankDTO = Omit<UsageStatisticsUserRankResponse, "trend"> & {
   trend: AdminUsageStatisticsTrendDTO[];
 };
 
-export type AdminUsageStatisticsData = {
+export type AdminUsageStatisticsData = Omit<
+  UsageStatisticsResponse,
+  "range" | "section" | "topModels" | "topUsers" | "totals" | "trend"
+> & {
   section: AdminUsageStatisticsSection;
-  range: {
-    startDate: string;
-    endDate: string;
-    granularity: "day" | "month" | string;
-  };
+  range: UsageStatisticsResponse["range"];
   totals: AdminUsageStatisticsMetricsDTO;
   trend: AdminUsageStatisticsTrendDTO[];
   topModels: AdminUsageStatisticsModelRankDTO[];

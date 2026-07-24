@@ -18,8 +18,8 @@ type PatchSettingsRequest struct {
 type PatchItem struct {
 	Namespace string `json:"namespace" binding:"required"`
 	Key       string `json:"key" binding:"required"`
-	Value     string `json:"value"`
-	Clear     bool   `json:"clear"`
+	Value     string `json:"value,omitempty"`
+	Clear     bool   `json:"clear,omitempty"`
 }
 
 // ── 响应 DTO ─────────────────────────────────────────────────────────────────
@@ -65,7 +65,6 @@ type BrandingManifestResponse struct {
 	Display         string                 `json:"display"`
 	BackgroundColor string                 `json:"background_color"`
 	ThemeColor      string                 `json:"theme_color"`
-	Orientation     string                 `json:"orientation"`
 	Categories      []string               `json:"categories"`
 	Lang            string                 `json:"lang"`
 	Icons           []BrandingManifestIcon `json:"icons"`

@@ -2,27 +2,34 @@
 
 FROM node:24-bookworm-slim AS frontend-builder
 
-WORKDIR /src/frontend
+WORKDIR /src
 
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 
 ARG NEXT_PUBLIC_API_BASE_URL=""
 ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
 
-COPY VERSION /src/VERSION
-COPY scripts /src/scripts
-COPY frontend/package.json frontend/pnpm-lock.yaml ./
-COPY frontend/scripts ./scripts
-COPY frontend/public/pwa ./public/pwa
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY frontend/package.json ./frontend/package.json
+COPY backend/package.json ./backend/package.json
+COPY packages/api-contract/package.json ./packages/api-contract/package.json
+COPY frontend/scripts ./frontend/scripts
+COPY frontend/public/pwa ./frontend/public/pwa
 
 RUN corepack enable
 
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     pnpm config set store-dir /pnpm/store \
-    && pnpm install --frozen-lockfile
+    && pnpm install --frozen-lockfile --prefer-offline --filter @deeix/web
 
-COPY frontend ./
+COPY VERSION /src/VERSION
+COPY scripts /src/scripts
+COPY frontend ./frontend
+COPY packages/api-contract ./packages/api-contract
+
+WORKDIR /src/frontend
 
 # 如果你的 Next 版本支持，可以在 next.config 里开启 turbopack build filesystem cache
 RUN --mount=type=cache,id=next-cache,target=/src/frontend/.next/cache \

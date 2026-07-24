@@ -117,6 +117,38 @@ func TestConversationFallbackTitleUsesUnifiedLimit(t *testing.T) {
 	}
 }
 
+func TestConversationFallbackTitlePatchOnlyReplacesPlaceholder(t *testing.T) {
+	userMsg := model.Message{Content: "帮我分析模型终止后的标题行为"}
+
+	patch, ok := conversationFallbackTitlePatch(model.Conversation{Title: "新对话"}, userMsg)
+	if !ok {
+		t.Fatal("expected placeholder title to receive a fallback patch")
+	}
+	if patch.Title != "帮我分析模型终止后的标题行为" {
+		t.Fatalf("fallback title = %q", patch.Title)
+	}
+
+	if _, ok = conversationFallbackTitlePatch(model.Conversation{Title: "手动标题"}, userMsg); ok {
+		t.Fatal("expected an existing title not to receive a fallback patch")
+	}
+	if _, ok = conversationFallbackTitlePatch(model.Conversation{Title: "新对话"}, model.Message{}); ok {
+		t.Fatal("expected empty user content not to receive a fallback patch")
+	}
+}
+
+func TestFallbackTitleSettlementOnlyRunsForCanceledGeneration(t *testing.T) {
+	userMsg := &model.Message{Content: "首条用户消息"}
+	if !shouldPersistConversationFallbackTitleAfterSend(ErrMessageGenerationCanceled, userMsg) {
+		t.Fatal("expected canceled generation to settle the fallback title")
+	}
+	if shouldPersistConversationFallbackTitleAfterSend(errors.New("upstream failed"), userMsg) {
+		t.Fatal("expected ordinary generation errors not to settle the fallback title")
+	}
+	if shouldPersistConversationFallbackTitleAfterSend(ErrMessageGenerationCanceled, nil) {
+		t.Fatal("expected cancellation without a persisted user message to skip title settlement")
+	}
+}
+
 func TestBuildConversationMetadataMessagesEmptyWhenNoText(t *testing.T) {
 	got := buildConversationMetadataMessages(model.Message{})
 	if got != "" {
@@ -126,33 +158,51 @@ func TestBuildConversationMetadataMessagesEmptyWhenNoText(t *testing.T) {
 
 func TestConversationMetadataRefreshHint(t *testing.T) {
 	cases := []struct {
-		name         string
-		conversation model.Conversation
-		userMsg      model.Message
-		want         string
+		name               string
+		conversation       model.Conversation
+		userMsg            model.Message
+		autoGenerateLabels bool
+		want               string
 	}{
 		{
-			name:         "not needed when title and labels already exist",
-			conversation: model.Conversation{Title: "已有标题", LabelsJSON: `["技术"]`},
-			userMsg:      model.Message{Content: "新的问题"},
-			want:         conversationMetadataRefreshNotNeeded,
+			name:               "not needed when title and labels already exist",
+			conversation:       model.Conversation{Title: "已有标题", LabelsJSON: `["技术"]`},
+			userMsg:            model.Message{Content: "新的问题"},
+			autoGenerateLabels: true,
+			want:               conversationMetadataRefreshNotNeeded,
 		},
 		{
-			name:         "skip when no titleable text",
-			conversation: model.Conversation{Title: "新对话", LabelsJSON: "[]"},
-			want:         conversationMetadataRefreshNoContent,
+			name:               "skip when no titleable text",
+			conversation:       model.Conversation{Title: "新对话", LabelsJSON: "[]"},
+			autoGenerateLabels: true,
+			want:               conversationMetadataRefreshNoContent,
 		},
 		{
-			name:         "pending when metadata needed and text exists",
-			conversation: model.Conversation{Title: "新对话", LabelsJSON: "[]"},
-			userMsg:      model.Message{Content: "帮我整理本周项目计划"},
-			want:         conversationMetadataRefreshPending,
+			name:               "pending when metadata needed and text exists",
+			conversation:       model.Conversation{Title: "新对话", LabelsJSON: "[]"},
+			userMsg:            model.Message{Content: "帮我整理本周项目计划"},
+			autoGenerateLabels: true,
+			want:               conversationMetadataRefreshPending,
+		},
+		{
+			name:               "not needed when only empty labels are disabled",
+			conversation:       model.Conversation{Title: "已有标题", LabelsJSON: "[]"},
+			userMsg:            model.Message{Content: "帮我整理本周项目计划"},
+			autoGenerateLabels: false,
+			want:               conversationMetadataRefreshNotNeeded,
+		},
+		{
+			name:               "pending for fallback title when labels are disabled",
+			conversation:       model.Conversation{Title: "新对话", LabelsJSON: "[]"},
+			userMsg:            model.Message{Content: "帮我整理本周项目计划"},
+			autoGenerateLabels: false,
+			want:               conversationMetadataRefreshPending,
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := conversationMetadataRefreshHint(tc.conversation, tc.userMsg)
+			got := conversationMetadataRefreshHint(tc.conversation, tc.userMsg, tc.autoGenerateLabels)
 			if got != tc.want {
 				t.Fatalf("unexpected metadata refresh hint: got %q, want %q", got, tc.want)
 			}
@@ -258,8 +308,31 @@ func TestShouldGenerateConversationMetadataAfterFailedFirstTurn(t *testing.T) {
 		MessageCount: 2,
 	}
 
-	if !shouldGenerateConversationMetadata(conversation) {
+	if !shouldGenerateConversationMetadata(conversation, true) {
 		t.Fatal("expected placeholder metadata to be generated even when failed messages already exist")
+	}
+}
+
+func TestConversationMetadataGenerationPlanRespectsLabelPreference(t *testing.T) {
+	conversation := model.Conversation{Title: "已有标题", LabelsJSON: "[]"}
+
+	disabled := buildConversationMetadataGenerationPlan(conversation, true, false)
+	if disabled.shouldRun() || disabled.generateLabels {
+		t.Fatalf("expected disabled labels to skip metadata generation, got %#v", disabled)
+	}
+
+	enabled := buildConversationMetadataGenerationPlan(conversation, true, true)
+	if !enabled.shouldRun() || !enabled.generateLabels {
+		t.Fatalf("expected enabled labels to schedule metadata generation, got %#v", enabled)
+	}
+}
+
+func TestConversationMetadataGenerationPlanKeepsFallbackTitleWhenModelTasksAreDisabled(t *testing.T) {
+	conversation := model.Conversation{Title: "新对话", LabelsJSON: "[]"}
+
+	plan := buildConversationMetadataGenerationPlan(conversation, false, false)
+	if !plan.shouldRun() || !plan.replaceTitle || plan.generateTitle || plan.generateLabels {
+		t.Fatalf("expected only fallback title metadata work, got %#v", plan)
 	}
 }
 
@@ -272,5 +345,59 @@ func TestConversationLabelsEmpty(t *testing.T) {
 	}
 	if conversationLabelsEmpty(`["技术"]`) {
 		t.Fatal("expected non-empty labels to be preserved")
+	}
+}
+
+func TestManuallyManagedConversationLabelsAreNotGeneratedAgain(t *testing.T) {
+	conversation := model.Conversation{
+		Title:                 "已有标题",
+		LabelsJSON:            "[]",
+		LabelsManuallyManaged: true,
+	}
+	if conversationLabelsEligibleForAutoGeneration(conversation) {
+		t.Fatal("expected manually cleared labels to remain under user control")
+	}
+	plan := buildConversationMetadataGenerationPlan(conversation, true, true)
+	if plan.generateLabels {
+		t.Fatal("expected metadata plan to skip manually managed labels")
+	}
+}
+
+func TestNormalizeConversationLabelsForUpdate(t *testing.T) {
+	labels, err := normalizeConversationLabelsForUpdate([]string{" 技术 ", "#运维", "TECH", "tech", "#release#", `"quoted"`})
+	if err != nil {
+		t.Fatalf("normalize labels: %v", err)
+	}
+	want := []string{"技术", "运维", "TECH", "release#", `"quoted"`}
+	if len(labels) != len(want) {
+		t.Fatalf("unexpected labels: got %#v, want %#v", labels, want)
+	}
+	for index := range want {
+		if labels[index] != want[index] {
+			t.Fatalf("unexpected labels: got %#v, want %#v", labels, want)
+		}
+	}
+}
+
+func TestNormalizeConversationLabelsForUpdateAllowsClearing(t *testing.T) {
+	labels, err := normalizeConversationLabelsForUpdate([]string{})
+	if err != nil {
+		t.Fatalf("normalize empty labels: %v", err)
+	}
+	if labels == nil || len(labels) != 0 {
+		t.Fatalf("expected non-nil empty labels, got %#v", labels)
+	}
+}
+
+func TestNormalizeConversationLabelsForUpdateRejectsInvalidValues(t *testing.T) {
+	cases := [][]string{
+		{""},
+		{strings.Repeat("标", conversationLabelMaxRunes+1)},
+		{"1", "2", "3", "4", "5", "6", "7"},
+	}
+	for _, labels := range cases {
+		if _, err := normalizeConversationLabelsForUpdate(labels); !errors.Is(err, ErrInvalidConversationLabels) {
+			t.Fatalf("expected invalid labels error for %#v, got %v", labels, err)
+		}
 	}
 }
