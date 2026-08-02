@@ -342,6 +342,7 @@ func (s *Service) persistInterruptedMessageGeneration(ctx context.Context, input
 		input.AssistantMessage.ID,
 		repository.AssistantMessageCompletionUpdate{
 			Content:          input.AssistantText,
+			ReasoningContent: strings.TrimSpace(input.AssistantReasoningText),
 			InputTokens:      interruptedCompletionInputTokens(input, metrics),
 			OutputTokens:     metrics.OutputTokens,
 			CacheReadTokens:  interruptedCompletionCacheReadTokens(input, metrics),
@@ -502,6 +503,7 @@ func applyInterruptedMessageGenerationState(input persistInterruptedMessageGener
 	}
 
 	input.AssistantMessage.Content = input.AssistantText
+	input.AssistantMessage.ReasoningContent = strings.TrimSpace(input.AssistantReasoningText)
 	if input.ReuseUserMessage {
 		input.AssistantMessage.InputTokens = metrics.InputTokens
 		input.AssistantMessage.CacheReadTokens = metrics.CacheReadTokens

@@ -611,7 +611,7 @@ export function AppChatArea() {
     failedGenerationRunsRef,
     resumingRunID,
   });
-  const generating = sending || Boolean(resumingRunID);
+  const generating = sending;
   const uploadDropDisabled = loading || uploading;
   const onStopActiveMessage = React.useCallback(() => {
     const visibleRunID = currentLeafMessage?.runID?.trim() || "";
@@ -622,7 +622,6 @@ export function AppChatArea() {
     if (onStopMessage()) {
       return;
     }
-    void cancelResumedGeneration();
   }, [
     cancelResumedGeneration,
     currentLeafMessage?.runID,

@@ -334,6 +334,10 @@ func handleSendMessageError(c *gin.Context, err error) {
 		response.Error(c, http.StatusNotFound, "conversation not found")
 	case errors.Is(err, appconversation.ErrInvalidFileReference):
 		response.Error(c, http.StatusBadRequest, "invalid file reference")
+	case errors.Is(err, appconversation.ErrFileNotFound):
+		response.Error(c, http.StatusNotFound, "file not found")
+	case errors.Is(err, appconversation.ErrFileTooLarge):
+		response.Error(c, http.StatusRequestEntityTooLarge, "file too large")
 	case errors.Is(err, appconversation.ErrTooManyMessageFiles):
 		response.Error(c, http.StatusBadRequest, "too many files in one message")
 	case errors.Is(err, appconversation.ErrTooManySelectedTools):

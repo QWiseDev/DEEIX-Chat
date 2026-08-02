@@ -121,7 +121,7 @@ type Message struct {
 	Status           string     `gorm:"size:32;not null;default:'';index:idx_chat_messages_status;comment:消息处理状态"`
 	ErrorCode        string     `gorm:"size:64;not null;default:'';comment:错误码"`
 	ErrorMessage     string     `gorm:"size:255;not null;default:'';comment:错误信息"`
-	IsCompacted      bool       `gorm:"not null;default:false;index:idx_chat_messages_is_compacted;comment:是否已被压缩(压缩后不纳入祖先链)"`
+	IsCompacted      bool       `gorm:"not null;default:false;index:idx_chat_messages_is_compacted;comment:预留未使用(祖先链未按此过滤，无读写方)"`
 	EditedAt         *time.Time `gorm:"index:idx_chat_messages_edited_at;comment:用户编辑时间"`
 	ParentPublicID   string     `gorm:"-"`
 	SourcePublicID   string     `gorm:"-"`

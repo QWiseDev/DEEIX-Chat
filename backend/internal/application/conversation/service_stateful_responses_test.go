@@ -129,6 +129,19 @@ func TestShouldRetryWithoutResponsesBackground(t *testing.T) {
 	}) {
 		t.Fatalf("expected unrelated validation error to stay non-retryable")
 	}
+	if !shouldRetryWithoutResponsesBackground(llm.MarkRequestAccepted(err)) {
+		t.Fatalf("expected explicit background rejection to preserve same-route fallback")
+	}
+}
+
+func TestShouldRetryWithoutPreviousResponseIDPreservesSameRouteFallback(t *testing.T) {
+	err := &llm.UpstreamError{StatusCode: 404, Message: "previous_response_id not found"}
+	if !shouldRetryWithoutPreviousResponseID(err) {
+		t.Fatalf("expected rejected previous response id to retry with full context")
+	}
+	if !shouldRetryWithoutPreviousResponseID(llm.MarkRequestAccepted(err)) {
+		t.Fatalf("expected explicit previous response rejection to preserve same-route fallback")
+	}
 }
 
 func TestBuildStatefulResponseMessagesKeepsLatestUserOnly(t *testing.T) {
@@ -180,6 +193,35 @@ func TestApplyOpenAIResponsesInstructionsOnlyForOfficialRoute(t *testing.T) {
 	applyOpenAIResponsesInstructions(custom, llm.EndpointResponses, &compatInput)
 	if compatInput.Instructions != "" || len(compatInput.Messages) != 2 {
 		t.Fatalf("expected custom route to keep system messages, got %#v", compatInput)
+	}
+}
+
+func TestApplyOpenAIResponsesInstructionsPreservesExplicitCacheableSystemPrefix(t *testing.T) {
+	official := &channel.ResolvedRoute{
+		Protocol: llm.AdapterOpenAIResponses,
+		BaseURL:  "https://api.openai.com/v1",
+	}
+	input := llm.GenerateInput{
+		Messages: []llm.Message{
+			{
+				Role:         "system",
+				Content:      "stable platform policy",
+				CacheControl: &llm.CacheControl{Type: "ephemeral"},
+			},
+			{Role: "user", Content: "dynamic question"},
+		},
+		Options: map[string]interface{}{
+			"prompt_cache_options": map[string]interface{}{"mode": "explicit", "ttl": "30m"},
+		},
+	}
+
+	applyOpenAIResponsesInstructions(official, llm.EndpointResponses, &input)
+
+	if input.Instructions != "" {
+		t.Fatalf("expected explicit cache policy not to move system content into instructions, got %q", input.Instructions)
+	}
+	if len(input.Messages) != 2 || input.Messages[0].Role != "system" || input.Messages[0].CacheControl == nil {
+		t.Fatalf("expected cacheable system prefix to remain in Responses input, got %#v", input.Messages)
 	}
 }
 
@@ -274,6 +316,35 @@ func TestBuildNextStatefulPrefixMessagesKeepsAssistantReasoning(t *testing.T) {
 	}
 	if got[2].ReasoningContent != "推理内容" {
 		t.Fatalf("expected assistant reasoning in state prefix, got %#v", got[2])
+	}
+}
+
+func TestBuildNextStatefulPrefixMessagesKeepsRebuildableUserImages(t *testing.T) {
+	imageData := []byte("image-data")
+	firstPrompt := []llm.Message{{
+		Role: "user",
+		Parts: []llm.ContentPart{
+			{Kind: llm.ContentPartText, Text: "第一轮"},
+			{Kind: llm.ContentPartImage, MimeType: "image/png", Data: imageData},
+		},
+	}}
+	stored := buildPromptStateFingerprint(promptStateFingerprintInput{
+		Messages: buildNextStatefulPrefixMessages(firstPrompt, "第一轮", "第一轮回答", ""),
+	})
+	secondPrompt := []llm.Message{
+		{
+			Role: "user",
+			Parts: []llm.ContentPart{
+				{Kind: llm.ContentPartText, Text: "第一轮"},
+				{Kind: llm.ContentPartImage, MimeType: "image/png", Data: imageData},
+			},
+		},
+		{Role: "assistant", Content: "第一轮回答"},
+		{Role: "user", Content: "继续"},
+	}
+	prefix := buildPromptStateFingerprint(promptStateFingerprintInput{Messages: promptStatePrefixMessages(secondPrompt)})
+	if stored != prefix {
+		t.Fatal("expected historical user image to preserve previous_response_id fingerprint")
 	}
 }
 

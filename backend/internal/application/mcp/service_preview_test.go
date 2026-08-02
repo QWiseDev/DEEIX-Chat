@@ -36,7 +36,7 @@ func (r previewTestRepo) GetServer(context.Context, uint) (*domainmcp.Server, er
 
 func (r previewTestRepo) DeleteServer(context.Context, uint) error { return nil }
 
-func (r previewTestRepo) ReplaceServerTools(context.Context, uint, []domainmcp.Tool) error {
+func (r previewTestRepo) ReplaceServerTools(context.Context, uint, []domainmcp.Tool, bool) error {
 	return nil
 }
 

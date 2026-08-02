@@ -282,6 +282,8 @@ type UsageLogResponse struct {
 	BilledCurrency      string    `json:"billedCurrency"`
 	BilledNanousd       int64     `json:"billedNanousd"`
 	BilledUSD           float64   `json:"billedUSD"`
+	BalanceAfterNanousd *int64    `json:"balanceAfterNanousd" extensions:"x-nullable,!x-omitempty"`
+	BalanceAfterUSD     *float64  `json:"balanceAfterUSD" extensions:"x-nullable,!x-omitempty"`
 	PricingSnapshotJSON string    `json:"pricingSnapshotJSON"`
 	CreatedAt           time.Time `json:"createdAt"`
 	UpdatedAt           time.Time `json:"updatedAt"`
@@ -792,10 +794,20 @@ func toUsageLogResponse(item domainbilling.UsageLedger, label appadmin.UserLabel
 		BilledCurrency:      item.BilledCurrency,
 		BilledNanousd:       item.BilledNanousd,
 		BilledUSD:           float64(item.BilledNanousd) / 1_000_000_000,
+		BalanceAfterNanousd: item.BalanceAfterNanousd,
+		BalanceAfterUSD:     nullableBalanceNanousdToUSD(item.BalanceAfterNanousd),
 		PricingSnapshotJSON: item.PricingSnapshotJSON,
 		CreatedAt:           item.CreatedAt,
 		UpdatedAt:           item.UpdatedAt,
 	}
+}
+
+func nullableBalanceNanousdToUSD(value *int64) *float64 {
+	if value == nil {
+		return nil
+	}
+	converted := float64(*value) / 1_000_000_000
+	return &converted
 }
 
 func toUsageStatisticsMetricsResponse(item domainbilling.UsageStatisticsMetrics) UsageStatisticsMetricsResponse {

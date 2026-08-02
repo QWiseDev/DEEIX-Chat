@@ -311,6 +311,187 @@ func TestListMessageAncestorsUntilReportsMissingBoundary(t *testing.T) {
 	}
 }
 
+// 祖先链走的是手写 CTE，与 GetMessageByID 的常规 GORM 查询是两条取数路径。
+// 这里逐字段比对两者结果，确保 CTE 不会丢列——曾因漏掉 reasoning_content 导致推理回传失效。
+// 注意覆盖边界：比对的是 domain.Message，因此只能守住会映射进领域模型的列；
+// 未进入领域模型的列（如 is_compacted）不在此测试范围内。
+func TestListMessageAncestorsMatchesFullColumnLoad(t *testing.T) {
+	db := openConversationRepositoryTestDB(t)
+	repo := NewRepo(db)
+	ctx := context.Background()
+
+	conversation := model.Conversation{
+		UserID:     1,
+		PublicID:   "conv_ancestors_columns",
+		Title:      "ancestors columns",
+		LabelsJSON: "[]",
+		SessionKey: "session_ancestors_columns",
+		Status:     "active",
+	}
+	if err := db.Create(&conversation).Error; err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+
+	root := model.Message{
+		ConversationID: conversation.ID,
+		UserID:         1,
+		PublicID:       "msg_columns_root",
+		Role:           "user",
+		ContentType:    "text",
+		Content:        "root",
+		BranchReason:   "default",
+		Status:         "success",
+	}
+	if err := db.Create(&root).Error; err != nil {
+		t.Fatalf("create root message: %v", err)
+	}
+
+	editedAt := time.Now().UTC().Truncate(time.Second)
+	sourceID := root.ID
+	// 所有可空/可选列都填非零值，任何一列被 CTE 丢弃都会在比对中暴露。
+	leaf := model.Message{
+		ConversationID:   conversation.ID,
+		UserID:           1,
+		PublicID:         "msg_columns_leaf",
+		ParentMessageID:  &root.ID,
+		RunID:            "run_columns",
+		Role:             "assistant",
+		ContentType:      "text",
+		Content:          "leaf",
+		ReasoningContent: "historical reasoning",
+		BranchReason:     "retry",
+		SourceMessageID:  &sourceID,
+		TokenUsage:       321,
+		InputTokens:      111,
+		OutputTokens:     222,
+		CacheReadTokens:  33,
+		CacheWriteTokens: 44,
+		ReasoningTokens:  125,
+		LatencyMS:        987,
+		BilledCurrency:   "USD",
+		BilledNanousd:    654,
+		PricingSnapshot:  `{"in":1}`,
+		Status:           "success",
+		ErrorCode:        "none",
+		ErrorMessage:     "no error",
+		IsCompacted:      true,
+		EditedAt:         &editedAt,
+	}
+	if err := db.Create(&leaf).Error; err != nil {
+		t.Fatalf("create leaf message: %v", err)
+	}
+
+	want, err := repo.GetMessageByID(ctx, conversation.ID, leaf.ID)
+	if err != nil {
+		t.Fatalf("GetMessageByID() error = %v", err)
+	}
+	if want.ReasoningContent == "" {
+		t.Fatal("baseline load lost reasoning content")
+	}
+
+	ancestors, err := repo.ListMessageAncestors(ctx, conversation.ID, leaf.ID, 10)
+	if err != nil {
+		t.Fatalf("ListMessageAncestors() error = %v", err)
+	}
+	if len(ancestors) != 2 {
+		t.Fatalf("expected root and leaf, got %d", len(ancestors))
+	}
+	if !reflect.DeepEqual(ancestors[1], *want) {
+		t.Fatalf("ListMessageAncestors dropped columns:\n cte = %#v\nfull = %#v", ancestors[1], *want)
+	}
+
+	until, found, err := repo.ListMessageAncestorsUntil(ctx, conversation.ID, leaf.ID, root.ID, 10)
+	if err != nil {
+		t.Fatalf("ListMessageAncestorsUntil() error = %v", err)
+	}
+	if !found {
+		t.Fatal("expected boundary to be found")
+	}
+	if len(until) != 2 {
+		t.Fatalf("expected root and leaf, got %d", len(until))
+	}
+	if !reflect.DeepEqual(until[1], *want) {
+		t.Fatalf("ListMessageAncestorsUntil dropped columns:\n cte = %#v\nfull = %#v", until[1], *want)
+	}
+}
+
+// 祖先链加载必须保留 reasoning_content，否则「回传推理上下文」在后续轮次拿不到历史推理。
+func TestListMessageAncestorsPreservesReasoningContent(t *testing.T) {
+	db := openConversationRepositoryTestDB(t)
+	repo := NewRepo(db)
+	ctx := context.Background()
+
+	conversation := model.Conversation{
+		UserID:     1,
+		PublicID:   "conv_ancestors_reasoning",
+		Title:      "ancestors reasoning",
+		LabelsJSON: "[]",
+		SessionKey: "session_ancestors_reasoning",
+		Status:     "active",
+	}
+	if err := db.Create(&conversation).Error; err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+
+	var parentID *uint
+	messages := make([]model.Message, 0, 4)
+	for index := 1; index <= 4; index++ {
+		role := "user"
+		reasoning := ""
+		if index%2 == 0 {
+			role = "assistant"
+			reasoning = fmt.Sprintf("reasoning %d", index)
+		}
+		message := model.Message{
+			ConversationID:   conversation.ID,
+			UserID:           1,
+			PublicID:         fmt.Sprintf("msg_reasoning_%d", index),
+			ParentMessageID:  parentID,
+			Role:             role,
+			ContentType:      "text",
+			Content:          fmt.Sprintf("message %d", index),
+			ReasoningContent: reasoning,
+			BranchReason:     "default",
+			Status:           "success",
+		}
+		if err := db.Create(&message).Error; err != nil {
+			t.Fatalf("create message %d: %v", index, err)
+		}
+		messages = append(messages, message)
+		nextParentID := message.ID
+		parentID = &nextParentID
+	}
+
+	leafID := messages[len(messages)-1].ID
+	assertReasoning := func(t *testing.T, method string, got []domainconversation.Message) {
+		t.Helper()
+		if len(got) != len(messages) {
+			t.Fatalf("%s: expected %d ancestors, got %d", method, len(messages), len(got))
+		}
+		for index, item := range got {
+			want := messages[index].ReasoningContent
+			if item.ReasoningContent != want {
+				t.Fatalf("%s: ancestor %d reasoning content = %q, want %q", method, index, item.ReasoningContent, want)
+			}
+		}
+	}
+
+	ancestors, err := repo.ListMessageAncestors(ctx, conversation.ID, leafID, 10)
+	if err != nil {
+		t.Fatalf("ListMessageAncestors() error = %v", err)
+	}
+	assertReasoning(t, "ListMessageAncestors", ancestors)
+
+	until, found, err := repo.ListMessageAncestorsUntil(ctx, conversation.ID, leafID, messages[0].ID, 10)
+	if err != nil {
+		t.Fatalf("ListMessageAncestorsUntil() error = %v", err)
+	}
+	if !found {
+		t.Fatal("expected boundary to be found")
+	}
+	assertReasoning(t, "ListMessageAncestorsUntil", until)
+}
+
 func TestUpdateAssistantMessageCompletionPersistsReasoningContent(t *testing.T) {
 	db := openConversationRepositoryTestDB(t)
 	repo := NewRepo(db)
@@ -844,4 +1025,62 @@ func openConversationRepositoryTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("migrate models: %v", err)
 	}
 	return db
+}
+
+// parent_message_id 上没有外键，「父消息同会话」只靠应用层保证。这里绕过应用层直接写入
+// 一条跨会话的父指针，确认递归查询不会走出当前会话——否则外部内容会进入 prompt 并被
+// 烤进压缩摘要反复重放。ListMessageAncestorsUntil 早已有此约束，两者需保持一致。
+func TestListMessageAncestorsStopsAtConversationBoundary(t *testing.T) {
+	db := openConversationRepositoryTestDB(t)
+	repo := NewRepo(db)
+	ctx := context.Background()
+
+	makeConversation := func(publicID string) model.Conversation {
+		conversation := model.Conversation{
+			UserID: 1, PublicID: publicID, Title: publicID,
+			LabelsJSON: "[]", SessionKey: "session_" + publicID, Status: "active",
+		}
+		if err := db.Create(&conversation).Error; err != nil {
+			t.Fatalf("create conversation %s: %v", publicID, err)
+		}
+		return conversation
+	}
+	foreign := makeConversation("conv_foreign")
+	own := makeConversation("conv_own")
+
+	// 另一个会话中的消息，内容不应被泄漏到本会话的祖先链里。
+	foreignMessage := model.Message{
+		ConversationID: foreign.ID, UserID: 1, PublicID: "msg_foreign",
+		Role: "assistant", ContentType: "text", Content: "FOREIGN_SECRET",
+		ReasoningContent: "FOREIGN_REASONING", BranchReason: "default", Status: "success",
+	}
+	if err := db.Create(&foreignMessage).Error; err != nil {
+		t.Fatalf("create foreign message: %v", err)
+	}
+
+	leaf := model.Message{
+		ConversationID: own.ID, UserID: 1, PublicID: "msg_own_leaf",
+		ParentMessageID: &foreignMessage.ID,
+		Role:            "user", ContentType: "text", Content: "own leaf",
+		BranchReason: "default", Status: "success",
+	}
+	if err := db.Create(&leaf).Error; err != nil {
+		t.Fatalf("create leaf: %v", err)
+	}
+
+	got, err := repo.ListMessageAncestors(ctx, own.ID, leaf.ID, 10)
+	if err != nil {
+		t.Fatalf("ListMessageAncestors() error = %v", err)
+	}
+	for _, item := range got {
+		if item.ConversationID != own.ID {
+			t.Fatalf("ancestor walked into conversation %d: %#v", item.ConversationID, item)
+		}
+		if strings.Contains(item.Content, "FOREIGN_SECRET") {
+			t.Fatalf("foreign content leaked into ancestor chain: %#v", item)
+		}
+	}
+	if len(got) != 1 || got[0].PublicID != "msg_own_leaf" {
+		t.Fatalf("expected only the in-conversation leaf, got %#v", got)
+	}
 }

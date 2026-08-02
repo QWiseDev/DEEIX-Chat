@@ -5619,6 +5619,8 @@ definitions:
         x-omitempty: false
       name:
         type: string
+      requiresToolMetadataSyncConfirmation:
+        type: boolean
       sortOrder:
         type: integer
       status:
@@ -5637,6 +5639,7 @@ definitions:
     - lastError
     - lastSyncedAt
     - name
+    - requiresToolMetadataSyncConfirmation
     - sortOrder
     - status
     - toolCount
@@ -7226,6 +7229,14 @@ definitions:
     type: object
   UsageLedgerResponse:
     properties:
+      balanceAfterNanousd:
+        type: integer
+        x-nullable: true
+        x-omitempty: false
+      balanceAfterUSD:
+        type: number
+        x-nullable: true
+        x-omitempty: false
       billedCurrency:
         type: string
       billedNanousd:
@@ -7287,6 +7298,8 @@ definitions:
       userID:
         type: integer
     required:
+    - balanceAfterNanousd
+    - balanceAfterUSD
     - billedCurrency
     - billedNanousd
     - billedUSD
@@ -7340,6 +7353,14 @@ definitions:
     type: object
   UsageLogResponse:
     properties:
+      balanceAfterNanousd:
+        type: integer
+        x-nullable: true
+        x-omitempty: false
+      balanceAfterUSD:
+        type: number
+        x-nullable: true
+        x-omitempty: false
       billedCurrency:
         type: string
       billedNanousd:
@@ -7405,6 +7426,8 @@ definitions:
       username:
         type: string
     required:
+    - balanceAfterNanousd
+    - balanceAfterUSD
     - billedCurrency
     - billedNanousd
     - billedUSD
@@ -10252,6 +10275,10 @@ paths:
         name: id
         required: true
         type: integer
+      - description: 是否用远端元数据覆盖管理员自定义的工具名称和说明
+        in: query
+        name: overwrite_customized_metadata
+        type: boolean
       produces:
       - application/json
       responses:

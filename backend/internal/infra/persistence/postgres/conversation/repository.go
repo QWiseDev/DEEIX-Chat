@@ -1982,8 +1982,11 @@ func (r *Repo) ListMessageAncestors(ctx context.Context, conversationID uint, le
 	}
 
 	// WITH RECURSIVE：从叶节点沿 parent_message_id 向上递归，_depth 用于限制深度。
-	// 外层 SELECT 显式列出所有 DB 列，排除 CTE 内部的 _depth 辅助列，
-	// 避免 GORM Scan 遇到未知字段。deleted_at IS NULL 保持软删除语义。
+	// 外层用 SELECT * 取全部列：GORM Scan 按列名映射并忽略未匹配的列，_depth 会被自然丢弃，
+	// 因此无需手写列清单（手写清单曾漏掉 reasoning_content 导致推理回传失效）。
+	// deleted_at IS NULL 保持软删除语义。
+	// 递归项约束 m.conversation_id：parent_message_id 上没有外键，「父消息同会话」仅靠
+	// 应用层保证，一旦被破坏，跨会话内容会进入 prompt 并被烤进压缩摘要反复重放。
 	const cteSQL = `
 WITH RECURSIVE ancestors AS (
     SELECT *, 1 AS _depth
@@ -1995,19 +1998,14 @@ WITH RECURSIVE ancestors AS (
     INNER JOIN ancestors a ON m.id = a.parent_message_id
     WHERE a.parent_message_id IS NOT NULL
       AND a._depth < ?
+      AND m.conversation_id = ?
       AND m.deleted_at IS NULL
 )
-SELECT id, conversation_id, user_id, public_id, parent_message_id, run_id,
-       role, content_type, content, branch_reason, source_message_id,
-       token_usage, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens,
-       latency_ms, billed_currency, billed_nanousd, pricing_snapshot,
-       status, error_code, error_message, is_compacted, edited_at,
-       created_at, updated_at, deleted_at
-FROM ancestors
+SELECT * FROM ancestors
 ORDER BY id ASC`
 
 	path := make([]models.Message, 0, maxDepth)
-	if err := r.db.WithContext(ctx).Raw(cteSQL, leafMessageID, conversationID, maxDepth).Scan(&path).Error; err != nil {
+	if err := r.db.WithContext(ctx).Raw(cteSQL, leafMessageID, conversationID, maxDepth, conversationID).Scan(&path).Error; err != nil {
 		return nil, translateError(err)
 	}
 
@@ -2117,13 +2115,7 @@ WITH RECURSIVE ancestors AS (
       AND m.conversation_id = ?
       AND m.deleted_at IS NULL
 )
-SELECT id, conversation_id, user_id, public_id, parent_message_id, run_id,
-       role, content_type, content, branch_reason, source_message_id,
-       token_usage, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens,
-       latency_ms, billed_currency, billed_nanousd, pricing_snapshot,
-       status, error_code, error_message, is_compacted, edited_at,
-       created_at, updated_at, deleted_at
-FROM ancestors
+SELECT * FROM ancestors
 ORDER BY id ASC`
 
 	path := make([]models.Message, 0, maxDepth)
